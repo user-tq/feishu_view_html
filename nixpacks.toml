@@ -1,0 +1,7 @@
+# Railway (NIXPACKS) 构建配置
+# 安装中文字体，解决 node-canvas 生成 PNG 时中文显示为方块的问题
+[phases.setup]
+aptPkgs = ["fonts-noto-cjk"]
+
+[start]
+cmd = "node server.js"

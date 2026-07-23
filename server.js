@@ -4,11 +4,35 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
-const { createCanvas } = require('canvas');
+const { createCanvas, GlobalFonts } = require('canvas');
 const echarts = require('echarts');
 const axios = require('axios');
 
 require('dotenv').config();
+
+// 注册中文字体，解决 Railway/Linux 环境下 node-canvas 中文显示为方块的问题
+const CJK_FONT_PATHS = [
+    '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
+    '/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf',
+    '/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc',
+    '/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc'
+];
+const CJK_FONT_FAMILY = 'Noto Sans CJK SC';
+let cjkFontRegistered = false;
+for (const fp of CJK_FONT_PATHS) {
+    if (fs.existsSync(fp)) {
+        try {
+            GlobalFonts.registerFromPath(fp, CJK_FONT_FAMILY);
+            cjkFontRegistered = true;
+            console.log('[Font] Registered CJK font:', fp);
+        } catch (e) {
+            console.warn('[Font] Failed to register:', fp, e.message);
+        }
+        break;
+    }
+}
+if (!cjkFontRegistered) console.warn('[Font] No CJK font found, Chinese may render as squares');
+const FONT_FAMILY = cjkFontRegistered ? CJK_FONT_FAMILY : 'sans-serif';
 
 const FEISHU_CONFIG = {
     app_id: process.env.FEISHU_APP_ID || '',
@@ -54,7 +78,8 @@ async function getAccessToken() {
 }
 
 async function fetchKlineData(code, date) {
-    const suffix = code.startsWith('6') || code.startsWith('9') ? 'sh' : 'sz';
+    const isShanghai = code.startsWith('6') || code.startsWith('9') || code.startsWith('5');
+    const suffix = isShanghai ? 'sh' : 'sz';
     const symbol = suffix + code;
     const apiUrl = 'http://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData?symbol=' + symbol + '&scale=30&ma=no&datalen=240';
     const response = await axios.get(apiUrl, {
@@ -91,19 +116,19 @@ async function generateKlinePNG(data, cost) {
     const chart = echarts.init(canvas, null, { renderer:'canvas' });
     await chart.setOption({
         backgroundColor:'#0d1117',
-        title:{ text:'30 min k', left:'center', top:10, textStyle:{ color:'#e6edf3', fontSize:18 }},
+        title:{ text:'30分钟K线图', left:'center', top:10, textStyle:{ color:'#e6edf3', fontSize:18, fontFamily:FONT_FAMILY }},
         tooltip:{ trigger:'axis', axisPointer:{ type:'cross' }},
         grid:[{ left:'60', right:'40', top:'50', height:'55%' },{ left:'60', right:'40', top:'62%', height:'15%' }],
         xAxis:[
-            { type:'category', data:dates, scale:true, boundaryGap:true, axisLine:{ lineStyle:{color:'#30363d'} }, splitLine:{show:false}, axisLabel:{color:'#8b949e', formatter:v=>v.split('-').slice(1).join('-')} },
+            { type:'category', data:dates, scale:true, boundaryGap:true, axisLine:{ lineStyle:{color:'#30363d'} }, splitLine:{show:false}, axisLabel:{color:'#8b949e', fontFamily:FONT_FAMILY, formatter:v=>v.split('-').slice(1).join('-')} },
             { type:'category', gridIndex:1, data:dates, axisLabel:{show:false} }
         ],
         yAxis:[
-            { scale:true, splitArea:{show:true, areaStyle:{color:['rgba(13,17,23,0.3)','rgba(22,27,34,0.3)']}}, axisLine:{lineStyle:{color:'#30363d'}}, splitLine:{show:true,lineStyle:{color:'#21262d'}}, axisLabel:{color:'#8b949e'} },
+            { scale:true, splitArea:{show:true, areaStyle:{color:['rgba(13,17,23,0.3)','rgba(22,27,34,0.3)']}}, axisLine:{lineStyle:{color:'#30363d'}}, splitLine:{show:true,lineStyle:{color:'#21262d'}}, axisLabel:{color:'#8b949e', fontFamily:FONT_FAMILY} },
             { gridIndex:1, splitNumber:2, axisLabel:{show:false}, splitLine:{show:false} }
         ],
         series:[
-            { type:'candlestick', data:ohlc, itemStyle:{color:'#ef4444',color0:'#22c55e',borderColor:'#ef4444',borderColor0:'#22c55e'}, markLine:{ symbol:['none','none'], label:{show:true,position:'insideStartTop',color:'#fbbf24',backgroundColor:'rgba(13,17,23,0.8)',padding:[3,6]}, lineStyle:{color:'#fbbf24',type:'dashed',width:1.5}, data:[{yAxis:+cost.toFixed(2),label:{formatter:'cost '+cost}}] }},
+            { type:'candlestick', data:ohlc, itemStyle:{color:'#ef4444',color0:'#22c55e',borderColor:'#ef4444',borderColor0:'#22c55e'}, markLine:{ symbol:['none','none'], label:{show:true,position:'insideStartTop',color:'#fbbf24',backgroundColor:'rgba(13,17,23,0.8)',padding:[3,6],fontFamily:FONT_FAMILY}, lineStyle:{color:'#fbbf24',type:'dashed',width:1.5}, data:[{yAxis:+cost.toFixed(2),label:{formatter:'成本 '+cost}}] }},
             { type:'bar', xAxisIndex:1, yAxisIndex:1, data:volumes, barWidth:'60%' }
         ]
     });
