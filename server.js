@@ -123,17 +123,23 @@ async function uploadFileToFeishu(fileBuffer, filename) {
     formData.append('parent_type', 'bitable_image');
     formData.append('parent_node', FEISHU_CONFIG.bitable_app_token);
     formData.append('size', String(fileBuffer.length));
-    formData.append('extra', '{}');
+    formData.append('extra', JSON.stringify({ drive_route_token: FEISHU_CONFIG.bitable_app_token }));
     formData.append('file', fileBuffer, { filename, contentType: 'image/png' });
-    const response = await axios.post(
-        'https://open.feishu.cn/open-apis/drive/v1/medias/upload_all',
-        formData,
-        { headers: { Authorization: 'Bearer '+token }, timeout: 30000 }
-    );
-    if (response.data && response.data.code === 0 && response.data.data && response.data.data.file_token) {
-        return response.data.data.file_token;
+    try {
+        const response = await axios.post(
+            'https://open.feishu.cn/open-apis/drive/v1/medias/upload_all',
+            formData,
+            { headers: { Authorization: 'Bearer '+token, ...formData.getHeaders() }, timeout: 30000 }
+        );
+        if (response.data && response.data.code === 0 && response.data.data && response.data.data.file_token) {
+            return response.data.data.file_token;
+        }
+        throw new Error('上传失败: ' + JSON.stringify(response.data));
+    } catch (error) {
+        console.error('[上传文件失败] 状态:', error.response?.status);
+        console.error('[上传文件失败] 响应:', JSON.stringify(error.response?.data));
+        throw error;
     }
-    throw new Error('上传失败: ' + JSON.stringify(response.data));
 }
 
 async function updateBitableRecord(recordId, fileToken) {
