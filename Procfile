@@ -1,1 +1,1 @@
-web: npm install --production && PORT=$PORT node server.js
+web: PORT=${PORT:-3000} node server.js
