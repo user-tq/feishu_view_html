@@ -91,7 +91,7 @@ async function generateKlinePNG(data, cost) {
     const chart = echarts.init(canvas, null, { renderer:'canvas' });
     await chart.setOption({
         backgroundColor:'#0d1117',
-        title:{ text:'30分钟K线图', left:'center', top:10, textStyle:{ color:'#e6edf3', fontSize:18 }},
+        title:{ text:'30 min k', left:'center', top:10, textStyle:{ color:'#e6edf3', fontSize:18 }},
         tooltip:{ trigger:'axis', axisPointer:{ type:'cross' }},
         grid:[{ left:'60', right:'40', top:'50', height:'55%' },{ left:'60', right:'40', top:'62%', height:'15%' }],
         xAxis:[
@@ -103,7 +103,7 @@ async function generateKlinePNG(data, cost) {
             { gridIndex:1, splitNumber:2, axisLabel:{show:false}, splitLine:{show:false} }
         ],
         series:[
-            { type:'candlestick', data:ohlc, itemStyle:{color:'#ef4444',color0:'#22c55e',borderColor:'#ef4444',borderColor0:'#22c55e'}, markLine:{ symbol:['none','none'], label:{show:true,position:'insideStartTop',color:'#fbbf24',backgroundColor:'rgba(13,17,23,0.8)',padding:[3,6]}, lineStyle:{color:'#fbbf24',type:'dashed',width:1.5}, data:[{yAxis:+cost.toFixed(2),label:{formatter:'成本 \x0075'+cost}}] }},
+            { type:'candlestick', data:ohlc, itemStyle:{color:'#ef4444',color0:'#22c55e',borderColor:'#ef4444',borderColor0:'#22c55e'}, markLine:{ symbol:['none','none'], label:{show:true,position:'insideStartTop',color:'#fbbf24',backgroundColor:'rgba(13,17,23,0.8)',padding:[3,6]}, lineStyle:{color:'#fbbf24',type:'dashed',width:1.5}, data:[{yAxis:+cost.toFixed(2),label:{formatter:'cost '+cost}}] }},
             { type:'bar', xAxisIndex:1, yAxisIndex:1, data:volumes, barWidth:'60%' }
         ]
     });
