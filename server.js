@@ -81,22 +81,50 @@ async function fetchKlineData(code, date) {
     const isShanghai = code.startsWith('6') || code.startsWith('9') || code.startsWith('5');
     const suffix = isShanghai ? 'sh' : 'sz';
     const symbol = suffix + code;
-    const apiUrl = 'http://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData?symbol=' + symbol + '&scale=30&ma=no&datalen=240';
+
+    // 动态计算 datalen：根据输入日期距今天的天数，确保数据覆盖输入日期
+    // 每天 8 根 30 分钟线，按 5/7 比例估算交易日，加 80 根缓冲（覆盖前 5 个交易日 + 节假日）
+    const today = new Date();
+    const inputDate = new Date(date);
+    const calendarDaysDiff = Math.max(1, Math.ceil((today - inputDate) / (24 * 60 * 60 * 1000)));
+    const estimatedBars = Math.ceil(calendarDaysDiff * 5 / 7 * 8) + 80;
+    const datalen = Math.min(Math.max(estimatedBars, 240), 3000);
+
+    const apiUrl = 'http://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData?symbol=' + symbol + '&scale=30&ma=no&datalen=' + datalen;
     const response = await axios.get(apiUrl, {
         timeout: 15000, headers: { 'User-Agent': 'Mozilla/5.0', 'Referer': 'https://finance.sina.com.cn/' }
     });
-    if (Array.isArray(response.data) && response.data.length > 0) {
-        const allKlines = response.data.sort((a, b) => new Date(a.day) - new Date(b.day));
-        const targetDate = new Date(date); targetDate.setHours(23,59,59,999);
-        const fiveDaysAgo = new Date(targetDate.getTime() - 5*24*60*60*1000);
-        const filtered = allKlines.filter(k => {
-            const kd = new Date(k.day.split(' ')[0]);
-            return kd >= fiveDaysAgo && kd <= targetDate;
-        });
-        if (filtered.length === 0) throw new Error('未找到 ' + date + ' 及其前5天的K线数据');
-        return { klines: filtered };
+    if (!Array.isArray(response.data) || response.data.length === 0) {
+        throw new Error('未获取到K线数据');
     }
-    throw new Error('未获取到K线数据');
+
+    const allKlines = response.data.sort((a, b) => new Date(a.day) - new Date(b.day));
+
+    // 提取所有交易日（去重排序）
+    const allDates = [...new Set(allKlines.map(k => k.day.split(' ')[0]))].sort();
+
+    // 定位目标交易日：输入日期当天，若为非交易日则取最近的之前交易日
+    let targetDateStr = date;
+    if (!allDates.includes(targetDateStr)) {
+        const earlierDates = allDates.filter(d => d <= targetDateStr);
+        if (earlierDates.length === 0) {
+            throw new Error('未找到 ' + date + ' 及其之前的交易日K线数据');
+        }
+        targetDateStr = earlierDates[earlierDates.length - 1];
+    }
+
+    // 取目标交易日及其前 5 个交易日（共 6 个交易日）
+    const targetIdx = allDates.indexOf(targetDateStr);
+    const startIdx = Math.max(0, targetIdx - 5);
+    const selectedDates = new Set(allDates.slice(startIdx, targetIdx + 1));
+
+    const filtered = allKlines.filter(k => selectedDates.has(k.day.split(' ')[0]));
+
+    if (filtered.length === 0) {
+        throw new Error('未找到 ' + date + ' 及其前5个交易日的K线数据');
+    }
+
+    return { klines: filtered, targetDate: targetDateStr };
 }
 
 function parseKlineData(klines) {
@@ -195,7 +223,7 @@ app.get('/api/kline', async (req, res) => {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: '日期格式不正确' });
     try {
         var klineData = await fetchKlineData(code, date);
-        return res.json({ success: true, code: code, date: date, klines: klineData.klines });
+        return res.json({ success: true, code: code, date: date, targetDate: klineData.targetDate, klines: klineData.klines });
     } catch (error) {
         console.error('['+code+'] 获取K线数据失败:', error.message);
         return res.status(500).json({ success: false, error: error.message, code: code, date: date });

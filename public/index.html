@@ -159,13 +159,9 @@
         }
 
         async function loadChart(code, date, cost) {
-            const targetDate = new Date(date);
-            const fiveDaysAgo = new Date(targetDate.getTime() - 5 * 24 * 60 * 60 * 1000);
-
             document.getElementById('stockCode').textContent = code;
             document.getElementById('costBadge').textContent = `成本 ${parseFloat(cost).toFixed(2)}`;
             document.getElementById('headerTitle').textContent = `${code} 30分钟K线图`;
-            document.getElementById('dateRange').textContent = `${formatDate(fiveDaysAgo)} ~ ${formatDate(targetDate)}`;
 
             try {
                 const response = await fetch(`/api/kline?code=${encodeURIComponent(code)}&date=${encodeURIComponent(date)}`);
@@ -173,8 +169,13 @@
                 if (!result.success || !result.klines || result.klines.length === 0) {
                     throw new Error(result.error || '未获取到K线数据');
                 }
+                // 用后端返回的实际数据范围显示
+                const firstDate = result.klines[0].day.split(' ')[0];
+                const lastDate = result.klines[result.klines.length - 1].day.split(' ')[0];
+                document.getElementById('dateRange').textContent = `${firstDate} ~ ${lastDate}`;
                 renderChart(result.klines, parseFloat(cost));
             } catch (err) {
+                document.getElementById('dateRange').textContent = '';
                 document.getElementById('klineChart').innerHTML = `<div class="center-message error"><p>加载K线数据失败</p><p>${err.message}</p></div>`;
             }
         }
