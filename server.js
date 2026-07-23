@@ -127,19 +127,38 @@ async function fetchKlineData(code, date) {
     return { klines: filtered, targetDate: targetDateStr };
 }
 
+function calcEMA(data, period) {
+    const k = 2 / (period + 1);
+    const ema = [data[0]];
+    for (let i = 1; i < data.length; i++) {
+        ema[i] = data[i] * k + ema[i - 1] * (1 - k);
+    }
+    return ema;
+}
+
+function calcMACD(closes, fast, slow, signal) {
+    const emaFast = calcEMA(closes, fast);
+    const emaSlow = calcEMA(closes, slow);
+    const dif = closes.map((_, i) => emaFast[i] - emaSlow[i]);
+    const dea = calcEMA(dif, signal);
+    const hist = dif.map((d, i) => (d - dea[i]) * 2);
+    return { dif: dif.map(v => +v.toFixed(4)), dea: dea.map(v => +v.toFixed(4)), hist: hist.map(v => +v.toFixed(4)) };
+}
+
 function parseKlineData(klines) {
-    const dates = [], ohlc = [], volumes = [];
+    const dates = [], ohlc = [], closes = [];
     klines.forEach(k => {
         const o=+k.open, c=+k.close, h=+k.high, l=+k.low;
         dates.push(k.day.split(' ')[0]);
         ohlc.push([o, c, l, h]);
-        volumes.push({ value:+k.volume, itemStyle:{ color:c>=o?'rgba(239,68,68,0.8)':'rgba(34,197,94,0.8)' }});
+        closes.push(c);
     });
-    return { dates, ohlc, volumes };
+    const macd = calcMACD(closes, 12, 26, 9);
+    return { dates, ohlc, macd };
 }
 
 async function generateKlinePNG(data, cost, code, date) {
-    const { dates, ohlc, volumes } = data;
+    const { dates, ohlc, macd } = data;
     const canvas = createCanvas(1200, 800);
     const chart = echarts.init(canvas, null, { renderer:'canvas' });
     await chart.setOption({
@@ -157,7 +176,9 @@ async function generateKlinePNG(data, cost, code, date) {
         ],
         series:[
             { type:'candlestick', data:ohlc, itemStyle:{color:'#ef4444',color0:'#22c55e',borderColor:'#ef4444',borderColor0:'#22c55e'}, markLine:{ symbol:['none','none'], label:{show:true,position:'insideStartTop',color:'#fbbf24',backgroundColor:'rgba(13,17,23,0.8)',padding:[3,6],fontFamily:FONT_FAMILY}, lineStyle:{color:'#fbbf24',type:'dashed',width:1.5}, data:[{yAxis:+cost.toFixed(2),label:{formatter:'成本 '+cost}}] }},
-            { type:'bar', xAxisIndex:1, yAxisIndex:1, data:volumes, barWidth:'60%' }
+            { name:'MACD', type:'bar', xAxisIndex:1, yAxisIndex:1, data: macd.hist.map(v => ({ value:v, itemStyle:{ color: v>=0?'rgba(239,68,68,0.8)':'rgba(34,197,94,0.8)' } })), barWidth:'60%' },
+            { name:'DIF', type:'line', xAxisIndex:1, yAxisIndex:1, data:macd.dif, showSymbol:false, lineStyle:{ color:'#ffffff', width:1 } },
+            { name:'DEA', type:'line', xAxisIndex:1, yAxisIndex:1, data:macd.dea, showSymbol:false, lineStyle:{ color:'#fbbf24', width:1 } }
         ]
     });
     const buf = chart.getZr().dom.toBuffer('image/png', { compressionLevel: 9 });
