@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>股票30分钟K线图</title>
+    <!-- 引入 ECharts -->
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: #0d1117;
+            color: #e6edf3;
+            min-height: 100vh;
+        }
+
+        .header {
+            background: #161b22;
+            border-bottom: 1px solid #30363d;
+            padding: 12px 20px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .header h1 {
+            font-size: 16px;
+            font-weight: 600;
+        }
+
+        .stock-info {
+            display: flex;
+            gap: 20px;
+            align-items: center;
+        }
+
+        .stock-code {
+            background: #1f6feb;
+            color: white;
+            padding: 4px 12px;
+            border-radius: 4px;
+            font-weight: 600;
+            font-size: 14px;
+        }
+
+        .chart-container {
+            width: 100%;
+            height: calc(100vh - 50px);
+        }
+
+        #klineChart {
+            width: 100%;
+            height: 100%;
+        }
+
+        .loading {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            font-size: 16px;
+            color: #8b949e;
+        }
+
+        .error {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            gap: 16px;
+            color: #f85149;
+        }
+
+        .error a {
+            color: #58a6ff;
+            text-decoration: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="loading" id="loading">正在加载K线图...</div>
+    
+    <div class="error" id="error" style="display: none;">
+        <p>加载失败</p>
+        <p id="errorMsg"></p>
+        <a href="/" id="backLink">返回</a>
+    </div>
+
+    <div class="header" id="header" style="display: none;">
+        <h1 id="headerTitle">30分钟K线图</h1>
+        <div class="stock-info">
+            <span class="stock-code" id="stockCode"></span>
+            <span id="dateRange"></span>
+        </div>
+    </div>
+
+    <div class="chart-container" id="chartContainer" style="display: none;">
+        <div id="klineChart"></div>
+    </div>
+
+    <script>
+        // 获取URL参数
+        function getQueryParam(param) {
+            const urlParams = new URLSearchParams(window.location.search);
+            return urlParams.get(param);
+        }
+
+        // 股票交易所后缀
+        function getExchangeSuffix(code) {
+            code = code.toUpperCase();
+            // 上交所股票
+            if (code.startsWith('6')) {
+                return '.SH';
+            }
+            // 深交所股票
+            if (code.startsWith('0') || code.startsWith('3')) {
+                return '.SZ';
+            }
+            // 北交所股票
+            if (code.startsWith('8') || code.startsWith('4')) {
+                return '.BJ';
+            }
+            return '.SH';
+        }
+
+        // 生成akshare风格的时间范围描述
+        function formatDateRange(startDate, endDate) {
+            const format = (date) => {
+                const y = date.getFullYear();
+                const m = String(date.getMonth() + 1).padStart(2, '0');
+                const d = String(date.getDate()).padStart(2, '0');
+                return `${y}-${m}-${d}`;
+            };
+            return `${format(startDate)} ~ ${format(endDate)}`;
+        }
+
+        // 初始化页面
+        async function init() {
+            const stockCode = getQueryParam('code');
+            const tradeDate = getQueryParam('date');
+
+            if (!stockCode || !tradeDate) {
+                showError('缺少必要参数：股票代码(code)和交易日期(date)');
+                return;
+            }
+
+            // 计算前后各一天的日期范围
+            const trade = new Date(tradeDate);
+            const startDate = new Date(trade);
+            startDate.setDate(trade.getDate() - 1);
+            const endDate = new Date(trade);
+            endDate.setDate(trade.getDate() + 1);
+
+            // 更新UI
+            document.getElementById('loading').style.display = 'none';
+            document.getElementById('header').style.display = 'flex';
+            document.getElementById('stockCode').textContent = stockCode;
+            document.getElementById('headerTitle').textContent = `${stockCode} 30分钟K线图`;
+            document.getElementById('dateRange').textContent = formatDateRange(startDate, endDate);
+            document.getElementById('chartContainer').style.display = 'block';
+
+            // 初始化图表
+            initChart(stockCode, tradeDate, startDate, endDate);
+        }
+
+        function initChart(code, date, startDate, endDate) {
+            const chartDom = document.getElementById('klineChart');
+            const myChart = echarts.init(chartDom);
+
+            // 使用东方财富或新浪财经的API获取数据
+            // 这里演示使用 akshare 风格的 K 线图
+            const suffix = getExchangeSuffix(code);
+            
+            // 模拟数据（实际应从API获取）
+            // 实际部署时需要替换为真实的股票数据API
+            const apiUrl = `https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=${code}${suffix}&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61&klt=60&fqt=1&beg=${startDate.toISOString().split('T')[0]}&end=${endDate.toISOString().split('T')[0]}&lmt=120`;
+
+            // 使用代理请求（解决跨域问题）
+            fetch(apiUrl)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.data && data.data.klines) {
+                        renderKLineChart(data.data.klines);
+                    } else {
+                        showError('未获取到K线数据，请检查股票代码是否正确');
+                    }
+                })
+                .catch(error => {
+                    console.error('获取数据失败:', error);
+                    // 如果直接请求失败，尝试使用备用方案
+                    showFallbackChart(code);
+                });
+
+            function renderKLineChart(klines) {
+                // 解析数据
+                const dates = [];
+                const ohlc = [];
+                const volumes = [];
+
+                klines.forEach(k => {
+                    const [date, open, close, high, low, volume, amount, change, percent] = k.split(',');
+                    dates.push(date);
+                    ohlc.push([parseFloat(open), parseFloat(close), parseFloat(low), parseFloat(high)]);
+                    volumes.push({
+                        value: parseInt(volume),
+                        itemStyle: {
+                            color: close >= open ? '#ef4444' : '#22c55e'
+                        }
+                    });
+                });
+
+                // 配置图表
+                const option = {
+                    backgroundColor: '#0d1117',
+                    tooltip: {
+                        trigger: 'axis',
+                        axisPointer: {
+                            type: 'cross'
+                        },
+                        formatter: function(params) {
+                            const kline = params[0];
+                            const volume = params[1];
+                            if (kline.data) {
+                                const [open, close, low, high] = kline.data;
+                                const change = (close - open).toFixed(2);
+                                const changePercent = ((change / open) * 100).toFixed(2);
+                                const color = close >= open ? '#ef4444' : '#22c55e';
+                                return `${kline.axisValue}<br/>
+                                    开: ${open}<br/>
+                                    收: ${close}<br/>
+                                    最低: ${low}<br/>
+                                    最高: ${high}<br/>
+                                    涨跌: ${change} (${changePercent}%)<br/>
+                                    成交量: ${volume.data.value}`;
+                            }
+                            return kline.name;
+                        }
+                    },
+                    axisPointer: {
+                        link: [{ xAxisIndex: 'all' }],
+                        label: {
+                            backgroundColor: '#30363d'
+                        }
+                    },
+                    grid: [
+                        { left: '8%', right: '4%', top: '8%', height: '60%' },
+                        { left: '8%', right: '4%', top: '75%', height: '15%' }
+                    ],
+                    xAxis: [
+                        {
+                            type: 'category',
+                            data: dates,
+                            scale: true,
+                            boundaryGap: true,
+                            axisLine: { lineStyle: { color: '#30363d' } },
+                            splitLine: { show: false },
+                            axisTick: { show: false },
+                            axisLabel: { 
+                                color: '#8b949e',
+                                formatter: function(value) {
+                                    return value.split('-')[1] + '-' + value.split('-')[2];
+                                }
+                            }
+                        },
+                        {
+                            type: 'category',
+                            gridIndex: 1,
+                            data: dates,
+                            scale: true,
+                            boundaryGap: true,
+                            axisLine: { lineStyle: { color: '#30363d' } },
+                            splitLine: { show: false },
+                            axisTick: { show: false },
+                            axisLabel: { show: false }
+                        }
+                    ],
+                    yAxis: [
+                        {
+                            scale: true,
+                            splitArea: {
+                                show: true,
+                                areaStyle: {
+                                    color: ['rgba(22,27,34,0.5)', 'rgba(13,17,23,0.5)']
+                                }
+                            },
+                            axisLine: { lineStyle: { color: '#30363d' } },
+                            splitLine: { 
+                                show: true,
+                                lineStyle: { color: '#21262d' }
+                            },
+                            axisLabel: { color: '#8b949e' }
+                        },
+                        {
+                            scale: true,
+                            gridIndex: 1,
+                            splitNumber: 2,
+                            axisLabel: { show: false },
+                            axisLine: { show: false },
+                            splitLine: { show: false }
+                        }
+                    ],
+                    dataZoom: [
+                        {
+                            type: 'inside',
+                            xAxisIndex: [0, 1],
+                            start: 0,
+                            end: 100
+                        },
+                        {
+                            type: 'slider',
+                            xAxisIndex: [0, 1],
+                            start: 0,
+                            end: 100,
+                            bottom: 10,
+                            borderColor: '#30363d',
+                            fillerColor: 'rgba(31, 111, 235, 0.2)',
+                            handleStyle: {
+                                color: '#1f6feb'
+                            },
+                            textStyle: {
+                                color: '#8b949e'
+                            }
+                        }
+                    ],
+                    series: [
+                        {
+                            name: 'K线',
+                            type: 'candlestick',
+                            data: ohlc,
+                            itemStyle: {
+                                color: '#ef4444',      // 阳线填充色
+                                color0: '#22c55e',     // 阴线填充色
+                                borderColor: '#ef4444',   // 阳线边框色
+                                borderColor0: '#22c55e',  // 阴线边框色
+                                borderWidth: 1
+                            },
+                            markLine: {
+                                symbol: ['none', 'none'],
+                                data: [
+                                    {
+                                        yAxis: 'max',
+                                        label: {
+                                            show: true,
+                                            position: 'insideStartTop',
+                                            color: '#fbbf24',
+                                            formatter: '最高'
+                                        },
+                                        lineStyle: {
+                                            color: '#fbbf24',
+                                            type: 'dashed'
+                                        },
+                                        data: [{ yAxis: 'max' }]
+                                    },
+                                    {
+                                        yAxis: 'min',
+                                        label: {
+                                            show: true,
+                                            position: 'insideStartBottom',
+                                            color: '#38bdf8',
+                                            formatter: '最低'
+                                        },
+                                        lineStyle: {
+                                            color: '#38bdf8',
+                                            type: 'dashed'
+                                        },
+                                        data: [{ yAxis: 'min' }]
+                                    }
+                                ]
+                            }
+                        },
+                        {
+                            name: '成交量',
+                            type: 'bar',
+                            xAxisIndex: 1,
+                            yAxisIndex: 1,
+                            data: volumes,
+                            barWidth: '60%'
+                        }
+                    ]
+                };
+
+                myChart.setOption(option);
+
+                // 响应窗口大小变化
+                window.addEventListener('resize', () => {
+                    myChart.resize();
+                });
+            }
+
+            function showFallbackChart(code) {
+                // 如果东方财富API失败，生成模拟数据进行展示
+                const suffix = getExchangeSuffix(code);
+                
+                showError(`无法连接到数据源<br/><a href="https://quote.eastmoney.com${suffix}.html" target="_blank">点击在东方财富查看 ${code}</a>`);
+            }
+        }
+
+        function showError(message) {
+            document.getElementById('loading').style.display = 'none';
+            document.getElementById('error').style.display = 'flex';
+            document.getElementById('errorMsg').innerHTML = message;
+        }
+
+        // 页面加载时初始化
+        init();
+    </script>
+</body>
+</html>
