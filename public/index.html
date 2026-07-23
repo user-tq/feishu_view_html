@@ -4,7 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>股票30分钟K线图</title>
-    <!-- 引入 ECharts -->
     <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
     <style>
         * {
@@ -12,14 +11,12 @@
             padding: 0;
             box-sizing: border-box;
         }
-
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
             background: #0d1117;
             color: #e6edf3;
             min-height: 100vh;
         }
-
         .header {
             background: #161b22;
             border-bottom: 1px solid #30363d;
@@ -27,388 +24,295 @@
             display: flex;
             align-items: center;
             justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 10px;
         }
-
         .header h1 {
             font-size: 16px;
             font-weight: 600;
         }
-
         .stock-info {
             display: flex;
-            gap: 20px;
+            gap: 16px;
             align-items: center;
+            flex-wrap: wrap;
         }
-
-        .stock-code {
-            background: #1f6feb;
-            color: white;
+        .stock-code, .cost-badge {
             padding: 4px 12px;
             border-radius: 4px;
             font-weight: 600;
             font-size: 14px;
         }
-
+        .stock-code {
+            background: #1f6feb;
+            color: white;
+        }
+        .cost-badge {
+            background: #fbbf24;
+            color: #0d1117;
+        }
+        .status {
+            padding: 8px 16px;
+            border-radius: 4px;
+            font-size: 13px;
+            display: none;
+        }
+        .status.loading {
+            display: block;
+            background: rgba(31, 111, 235, 0.15);
+            color: #58a6ff;
+        }
+        .status.success {
+            display: block;
+            background: rgba(34, 197, 94, 0.15);
+            color: #22c55e;
+        }
+        .status.error {
+            display: block;
+            background: rgba(248, 81, 73, 0.15);
+            color: #f85149;
+        }
         .chart-container {
             width: 100%;
-            height: calc(100vh - 50px);
+            height: calc(100vh - 110px);
         }
-
         #klineChart {
             width: 100%;
             height: 100%;
         }
-
-        .loading {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            height: 100vh;
-            font-size: 16px;
-            color: #8b949e;
-        }
-
-        .error {
+        .center-message {
             display: flex;
             flex-direction: column;
             align-items: center;
             justify-content: center;
             height: 100vh;
-            gap: 16px;
+            gap: 12px;
+            text-align: center;
+            padding: 20px;
+        }
+        .center-message.error {
             color: #f85149;
         }
-
-        .error a {
+        .center-message a {
             color: #58a6ff;
             text-decoration: none;
         }
     </style>
 </head>
 <body>
-    <div class="loading" id="loading">正在加载K线图...</div>
-    
-    <div class="error" id="error" style="display: none;">
-        <p>加载失败</p>
-        <p id="errorMsg"></p>
-        <a href="/" id="backLink">返回</a>
+    <div id="paramError" class="center-message error" style="display: none;">
+        <p>缺少必要参数</p>
+        <p id="paramErrorMsg"></p>
     </div>
 
-    <div class="header" id="header" style="display: none;">
-        <h1 id="headerTitle">30分钟K线图</h1>
-        <div class="stock-info">
-            <span class="stock-code" id="stockCode"></span>
-            <span id="dateRange"></span>
+    <div id="app" style="display: none;">
+        <div class="header">
+            <h1 id="headerTitle">30分钟K线图</h1>
+            <div class="stock-info">
+                <span class="stock-code" id="stockCode"></span>
+                <span class="cost-badge" id="costBadge"></span>
+                <span id="dateRange"></span>
+            </div>
+        </div>
+        <div id="uploadStatus" class="status"></div>
+        <div class="chart-container">
+            <div id="klineChart"></div>
         </div>
     </div>
 
-    <div class="chart-container" id="chartContainer" style="display: none;">
-        <div id="klineChart"></div>
-    </div>
-
     <script>
-        // 获取URL参数
         function getQueryParam(param) {
-            const urlParams = new URLSearchParams(window.location.search);
-            return urlParams.get(param);
+            return new URLSearchParams(window.location.search).get(param);
         }
 
-        // 股票交易所后缀
-        function getExchangeSuffix(code) {
-            code = code.toUpperCase();
-            // 上交所股票
-            if (code.startsWith('6')) {
-                return '.SH';
-            }
-            // 深交所股票
-            if (code.startsWith('0') || code.startsWith('3')) {
-                return '.SZ';
-            }
-            // 北交所股票
-            if (code.startsWith('8') || code.startsWith('4')) {
-                return '.BJ';
-            }
-            return '.SH';
+        function formatDate(date) {
+            const y = date.getFullYear();
+            const m = String(date.getMonth() + 1).padStart(2, '0');
+            const d = String(date.getDate()).padStart(2, '0');
+            return `${y}-${m}-${d}`;
         }
 
-        // 生成akshare风格的时间范围描述
-        function formatDateRange(startDate, endDate) {
-            const format = (date) => {
-                const y = date.getFullYear();
-                const m = String(date.getMonth() + 1).padStart(2, '0');
-                const d = String(date.getDate()).padStart(2, '0');
-                return `${y}-${m}-${d}`;
-            };
-            return `${format(startDate)} ~ ${format(endDate)}`;
+        function showParamError(msg) {
+            document.getElementById('paramError').style.display = 'flex';
+            document.getElementById('paramErrorMsg').textContent = msg;
         }
 
-        // 初始化页面
-        async function init() {
-            const stockCode = getQueryParam('code');
-            const tradeDate = getQueryParam('date');
+        function setStatus(el, type, text) {
+            el.className = 'status ' + type;
+            el.textContent = text;
+        }
 
-            if (!stockCode || !tradeDate) {
-                showError('缺少必要参数：股票代码(code)和交易日期(date)');
-                return;
+        async function uploadChart(recordId, code, date, cost) {
+            const statusEl = document.getElementById('uploadStatus');
+            setStatus(statusEl, 'loading', '正在生成K线图并上传至飞书...');
+            try {
+                const response = await fetch(`/api/chart?record_id=${encodeURIComponent(recordId)}&code=${encodeURIComponent(code)}&date=${encodeURIComponent(date)}&cost=${encodeURIComponent(cost)}`);
+                const result = await response.json();
+                if (result.success) {
+                    setStatus(statusEl, 'success', `已上传至飞书记录 ${recordId}（${result.klines_count} 根K线）`);
+                } else {
+                    setStatus(statusEl, 'error', `上传失败：${result.error || '未知错误'}`);
+                }
+            } catch (err) {
+                setStatus(statusEl, 'error', `上传失败：${err.message}`);
             }
-
-            // 计算前后各一天的日期范围
-            const trade = new Date(tradeDate);
-            const startDate = new Date(trade);
-            startDate.setDate(trade.getDate() - 1);
-            const endDate = new Date(trade);
-            endDate.setDate(trade.getDate() + 1);
-
-            // 更新UI
-            document.getElementById('loading').style.display = 'none';
-            document.getElementById('header').style.display = 'flex';
-            document.getElementById('stockCode').textContent = stockCode;
-            document.getElementById('headerTitle').textContent = `${stockCode} 30分钟K线图`;
-            document.getElementById('dateRange').textContent = formatDateRange(startDate, endDate);
-            document.getElementById('chartContainer').style.display = 'block';
-
-            // 初始化图表
-            initChart(stockCode, tradeDate, startDate, endDate);
         }
 
-        function initChart(code, date, startDate, endDate) {
+        async function loadChart(code, date, cost) {
+            const targetDate = new Date(date);
+            const fiveDaysAgo = new Date(targetDate.getTime() - 5 * 24 * 60 * 60 * 1000);
+
+            document.getElementById('stockCode').textContent = code;
+            document.getElementById('costBadge').textContent = `成本 ${parseFloat(cost).toFixed(2)}`;
+            document.getElementById('headerTitle').textContent = `${code} 30分钟K线图`;
+            document.getElementById('dateRange').textContent = `${formatDate(fiveDaysAgo)} ~ ${formatDate(targetDate)}`;
+
+            try {
+                const response = await fetch(`/api/kline?code=${encodeURIComponent(code)}&date=${encodeURIComponent(date)}`);
+                const result = await response.json();
+                if (!result.success || !result.klines || result.klines.length === 0) {
+                    throw new Error(result.error || '未获取到K线数据');
+                }
+                renderChart(result.klines, parseFloat(cost));
+            } catch (err) {
+                document.getElementById('klineChart').innerHTML = `<div class="center-message error"><p>加载K线数据失败</p><p>${err.message}</p></div>`;
+            }
+        }
+
+        function renderChart(klines, cost) {
+            const dates = [];
+            const ohlc = [];
+            const volumes = [];
+
+            klines.forEach(k => {
+                const o = +k.open, c = +k.close, h = +k.high, l = +k.low;
+                dates.push(k.day);
+                ohlc.push([o, c, l, h]);
+                volumes.push({
+                    value: +k.volume,
+                    itemStyle: { color: c >= o ? 'rgba(239,68,68,0.8)' : 'rgba(34,197,94,0.8)' }
+                });
+            });
+
             const chartDom = document.getElementById('klineChart');
             const myChart = echarts.init(chartDom);
 
-            // 使用东方财富或新浪财经的API获取数据
-            // 这里演示使用 akshare 风格的 K 线图
-            const suffix = getExchangeSuffix(code);
-            
-            // 模拟数据（实际应从API获取）
-            // 实际部署时需要替换为真实的股票数据API
-            const apiUrl = `https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=${code}${suffix}&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61&klt=60&fqt=1&beg=${startDate.toISOString().split('T')[0]}&end=${endDate.toISOString().split('T')[0]}&lmt=120`;
-
-            // 使用代理请求（解决跨域问题）
-            fetch(apiUrl)
-                .then(response => response.json())
-                .then(data => {
-                    if (data.data && data.data.klines) {
-                        renderKLineChart(data.data.klines);
-                    } else {
-                        showError('未获取到K线数据，请检查股票代码是否正确');
+            const option = {
+                backgroundColor: '#0d1117',
+                tooltip: {
+                    trigger: 'axis',
+                    axisPointer: { type: 'cross' }
+                },
+                axisPointer: {
+                    link: [{ xAxisIndex: 'all' }],
+                    label: { backgroundColor: '#30363d' }
+                },
+                grid: [
+                    { left: '60', right: '40', top: '50', height: '55%' },
+                    { left: '60', right: '40', top: '62%', height: '15%' }
+                ],
+                xAxis: [
+                    {
+                        type: 'category',
+                        data: dates,
+                        scale: true,
+                        boundaryGap: true,
+                        axisLine: { lineStyle: { color: '#30363d' } },
+                        splitLine: { show: false },
+                        axisLabel: { color: '#8b949e', formatter: v => v.split(' ')[0].split('-').slice(1).join('-') }
+                    },
+                    {
+                        type: 'category',
+                        gridIndex: 1,
+                        data: dates,
+                        axisLabel: { show: false }
                     }
-                })
-                .catch(error => {
-                    console.error('获取数据失败:', error);
-                    // 如果直接请求失败，尝试使用备用方案
-                    showFallbackChart(code);
-                });
-
-            function renderKLineChart(klines) {
-                // 解析数据
-                const dates = [];
-                const ohlc = [];
-                const volumes = [];
-
-                klines.forEach(k => {
-                    const [date, open, close, high, low, volume, amount, change, percent] = k.split(',');
-                    dates.push(date);
-                    ohlc.push([parseFloat(open), parseFloat(close), parseFloat(low), parseFloat(high)]);
-                    volumes.push({
-                        value: parseInt(volume),
+                ],
+                yAxis: [
+                    {
+                        scale: true,
+                        splitArea: { show: true, areaStyle: { color: ['rgba(13,17,23,0.3)', 'rgba(22,27,34,0.3)'] } },
+                        axisLine: { lineStyle: { color: '#30363d' } },
+                        splitLine: { show: true, lineStyle: { color: '#21262d' } },
+                        axisLabel: { color: '#8b949e' }
+                    },
+                    {
+                        gridIndex: 1,
+                        splitNumber: 2,
+                        axisLabel: { show: false },
+                        splitLine: { show: false }
+                    }
+                ],
+                dataZoom: [
+                    { type: 'inside', xAxisIndex: [0, 1], start: 0, end: 100 },
+                    { type: 'slider', xAxisIndex: [0, 1], start: 0, end: 100, bottom: 10, borderColor: '#30363d', fillerColor: 'rgba(31,111,235,0.2)', handleStyle: { color: '#1f6feb' }, textStyle: { color: '#8b949e' } }
+                ],
+                series: [
+                    {
+                        type: 'candlestick',
+                        data: ohlc,
                         itemStyle: {
-                            color: close >= open ? '#ef4444' : '#22c55e'
-                        }
-                    });
-                });
-
-                // 配置图表
-                const option = {
-                    backgroundColor: '#0d1117',
-                    tooltip: {
-                        trigger: 'axis',
-                        axisPointer: {
-                            type: 'cross'
+                            color: '#ef4444',
+                            color0: '#22c55e',
+                            borderColor: '#ef4444',
+                            borderColor0: '#22c55e'
                         },
-                        formatter: function(params) {
-                            const kline = params[0];
-                            const volume = params[1];
-                            if (kline.data) {
-                                const [open, close, low, high] = kline.data;
-                                const change = (close - open).toFixed(2);
-                                const changePercent = ((change / open) * 100).toFixed(2);
-                                const color = close >= open ? '#ef4444' : '#22c55e';
-                                return `${kline.axisValue}<br/>
-                                    开: ${open}<br/>
-                                    收: ${close}<br/>
-                                    最低: ${low}<br/>
-                                    最高: ${high}<br/>
-                                    涨跌: ${change} (${changePercent}%)<br/>
-                                    成交量: ${volume.data.value}`;
-                            }
-                            return kline.name;
+                        markLine: {
+                            symbol: ['none', 'none'],
+                            label: {
+                                show: true,
+                                position: 'insideStartTop',
+                                color: '#fbbf24',
+                                backgroundColor: 'rgba(13,17,23,0.8)',
+                                padding: [3, 6],
+                                formatter: `成本 ${cost.toFixed(2)}`
+                            },
+                            lineStyle: { color: '#fbbf24', type: 'dashed', width: 1.5 },
+                            data: [{ yAxis: cost }]
                         }
                     },
-                    axisPointer: {
-                        link: [{ xAxisIndex: 'all' }],
-                        label: {
-                            backgroundColor: '#30363d'
-                        }
-                    },
-                    grid: [
-                        { left: '8%', right: '4%', top: '8%', height: '60%' },
-                        { left: '8%', right: '4%', top: '75%', height: '15%' }
-                    ],
-                    xAxis: [
-                        {
-                            type: 'category',
-                            data: dates,
-                            scale: true,
-                            boundaryGap: true,
-                            axisLine: { lineStyle: { color: '#30363d' } },
-                            splitLine: { show: false },
-                            axisTick: { show: false },
-                            axisLabel: { 
-                                color: '#8b949e',
-                                formatter: function(value) {
-                                    return value.split('-')[1] + '-' + value.split('-')[2];
-                                }
-                            }
-                        },
-                        {
-                            type: 'category',
-                            gridIndex: 1,
-                            data: dates,
-                            scale: true,
-                            boundaryGap: true,
-                            axisLine: { lineStyle: { color: '#30363d' } },
-                            splitLine: { show: false },
-                            axisTick: { show: false },
-                            axisLabel: { show: false }
-                        }
-                    ],
-                    yAxis: [
-                        {
-                            scale: true,
-                            splitArea: {
-                                show: true,
-                                areaStyle: {
-                                    color: ['rgba(22,27,34,0.5)', 'rgba(13,17,23,0.5)']
-                                }
-                            },
-                            axisLine: { lineStyle: { color: '#30363d' } },
-                            splitLine: { 
-                                show: true,
-                                lineStyle: { color: '#21262d' }
-                            },
-                            axisLabel: { color: '#8b949e' }
-                        },
-                        {
-                            scale: true,
-                            gridIndex: 1,
-                            splitNumber: 2,
-                            axisLabel: { show: false },
-                            axisLine: { show: false },
-                            splitLine: { show: false }
-                        }
-                    ],
-                    dataZoom: [
-                        {
-                            type: 'inside',
-                            xAxisIndex: [0, 1],
-                            start: 0,
-                            end: 100
-                        },
-                        {
-                            type: 'slider',
-                            xAxisIndex: [0, 1],
-                            start: 0,
-                            end: 100,
-                            bottom: 10,
-                            borderColor: '#30363d',
-                            fillerColor: 'rgba(31, 111, 235, 0.2)',
-                            handleStyle: {
-                                color: '#1f6feb'
-                            },
-                            textStyle: {
-                                color: '#8b949e'
-                            }
-                        }
-                    ],
-                    series: [
-                        {
-                            name: 'K线',
-                            type: 'candlestick',
-                            data: ohlc,
-                            itemStyle: {
-                                color: '#ef4444',      // 阳线填充色
-                                color0: '#22c55e',     // 阴线填充色
-                                borderColor: '#ef4444',   // 阳线边框色
-                                borderColor0: '#22c55e',  // 阴线边框色
-                                borderWidth: 1
-                            },
-                            markLine: {
-                                symbol: ['none', 'none'],
-                                data: [
-                                    {
-                                        yAxis: 'max',
-                                        label: {
-                                            show: true,
-                                            position: 'insideStartTop',
-                                            color: '#fbbf24',
-                                            formatter: '最高'
-                                        },
-                                        lineStyle: {
-                                            color: '#fbbf24',
-                                            type: 'dashed'
-                                        },
-                                        data: [{ yAxis: 'max' }]
-                                    },
-                                    {
-                                        yAxis: 'min',
-                                        label: {
-                                            show: true,
-                                            position: 'insideStartBottom',
-                                            color: '#38bdf8',
-                                            formatter: '最低'
-                                        },
-                                        lineStyle: {
-                                            color: '#38bdf8',
-                                            type: 'dashed'
-                                        },
-                                        data: [{ yAxis: 'min' }]
-                                    }
-                                ]
-                            }
-                        },
-                        {
-                            name: '成交量',
-                            type: 'bar',
-                            xAxisIndex: 1,
-                            yAxisIndex: 1,
-                            data: volumes,
-                            barWidth: '60%'
-                        }
-                    ]
-                };
+                    {
+                        type: 'bar',
+                        xAxisIndex: 1,
+                        yAxisIndex: 1,
+                        data: volumes,
+                        barWidth: '60%'
+                    }
+                ]
+            };
 
-                myChart.setOption(option);
-
-                // 响应窗口大小变化
-                window.addEventListener('resize', () => {
-                    myChart.resize();
-                });
-            }
-
-            function showFallbackChart(code) {
-                // 如果东方财富API失败，生成模拟数据进行展示
-                const suffix = getExchangeSuffix(code);
-                
-                showError(`无法连接到数据源<br/><a href="https://quote.eastmoney.com${suffix}.html" target="_blank">点击在东方财富查看 ${code}</a>`);
-            }
+            myChart.setOption(option);
+            window.addEventListener('resize', () => myChart.resize());
         }
 
-        function showError(message) {
-            document.getElementById('loading').style.display = 'none';
-            document.getElementById('error').style.display = 'flex';
-            document.getElementById('errorMsg').innerHTML = message;
+        async function init() {
+            const recordId = getQueryParam('record_id');
+            const code = getQueryParam('code');
+            const date = getQueryParam('date');
+            const cost = getQueryParam('cost');
+
+            if (!recordId || !code || !date || !cost) {
+                showParamError('需要参数：record_id、code、date、cost');
+                return;
+            }
+            if (!/^\d{6}$/.test(code)) {
+                showParamError('股票代码必须是6位数字');
+                return;
+            }
+            if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+                showParamError('日期格式必须是 YYYY-MM-DD');
+                return;
+            }
+            if (isNaN(parseFloat(cost))) {
+                showParamError('买入价格必须是数字');
+                return;
+            }
+
+            document.getElementById('app').style.display = 'block';
+            loadChart(code, date, cost);
+            uploadChart(recordId, code, date, cost);
         }
 
-        // 页面加载时初始化
         init();
     </script>
 </body>
