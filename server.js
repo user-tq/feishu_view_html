@@ -1,3 +1,5 @@
+require('dotenv').config();
+
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
@@ -16,6 +18,13 @@ const FEISHU_CONFIG = {
     table_id: process.env.FEISHU_TABLE_ID || '',
     _token_expiry: 0,
 };
+
+const REQUIRED_ENVS = ['FEISHU_APP_ID', 'FEISHU_APP_SECRET', 'FEISHU_BITABLE_APP_TOKEN', 'FEISHU_TABLE_ID'];
+const missingEnvs = REQUIRED_ENVS.filter(k => !process.env[k]);
+if (missingEnvs.length > 0) {
+    console.error('缺少必要环境变量:', missingEnvs.join(', '));
+    process.exit(1);
+}
 
 const TMP_DIR = path.join(__dirname, 'tmp');
 if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR, { recursive: true });
