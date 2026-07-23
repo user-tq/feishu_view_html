@@ -138,13 +138,13 @@ function parseKlineData(klines) {
     return { dates, ohlc, volumes };
 }
 
-async function generateKlinePNG(data, cost) {
+async function generateKlinePNG(data, cost, code, date) {
     const { dates, ohlc, volumes } = data;
     const canvas = createCanvas(1200, 800);
     const chart = echarts.init(canvas, null, { renderer:'canvas' });
     await chart.setOption({
         backgroundColor:'#0d1117',
-        title:{ text:'30分钟K线图', left:'center', top:10, textStyle:{ color:'#e6edf3', fontSize:18, fontFamily:FONT_FAMILY }},
+        title:{ text: code + ' ' + date + ' 30分K', left:'center', top:10, textStyle:{ color:'#e6edf3', fontSize:18, fontFamily:FONT_FAMILY }},
         tooltip:{ trigger:'axis', axisPointer:{ type:'cross' }},
         grid:[{ left:'60', right:'40', top:'50', height:'55%' },{ left:'60', right:'40', top:'62%', height:'15%' }],
         xAxis:[
@@ -216,6 +216,7 @@ async function updateBitableRecord(recordId, fileToken) {
 app.get('/api/kline', async (req, res) => {
     var code = req.query.code;
     var date = req.query.date;
+    console.log('[API /api/kline] 入参: code=' + code + ', date=' + date);
     if (!code || !date) {
         return res.status(400).json({ error: '缺少必要参数', required: ['code','date'] });
     }
@@ -235,6 +236,7 @@ app.get('/api/chart', async (req, res) => {
     var code = req.query.code;
     var date = req.query.date;
     var cost = req.query.cost;
+    console.log('[API /api/chart] 入参: record_id=' + rid + ', code=' + code + ', date=' + date + ', cost=' + cost);
     if (!rid || !code || !date || !cost) {
         return res.status(400).json({ error: '缺少必要参数', required: ['record_id','code','date','cost'] });
     }
@@ -250,7 +252,7 @@ app.get('/api/chart', async (req, res) => {
         console.log('['+code+'] 获取到 '+klineData.klines.length+' 根K线');
         var parsedData = parseKlineData(klineData.klines);
         console.log('['+code+'] 生成K线图...');
-        var pngBuffer = await generateKlinePNG(parsedData, buyCost);
+        var pngBuffer = await generateKlinePNG(parsedData, buyCost, code, date);
         console.log('['+code+'] K线图生成成功，大小: '+pngBuffer.length+' bytes');
         var tmpFile = path.join(TMP_DIR, code+'_'+date+'_kline.png');
         fs.writeFileSync(tmpFile, pngBuffer);
