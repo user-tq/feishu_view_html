@@ -40,6 +40,7 @@ const FEISHU_CONFIG = {
     tenant_access_token: process.env.FEISHU_TENANT_ACCESS_TOKEN || '',
     bitable_app_token: process.env.FEISHU_BITABLE_APP_TOKEN || '',
     table_id: process.env.FEISHU_TABLE_ID || '',
+    period_high_field: process.env.PERIOD_HIGH_FIELD || '期间价',
     _token_expiry: 0,
 };
 
@@ -127,38 +128,98 @@ async function fetchKlineData(code, date) {
     return { klines: filtered, targetDate: targetDateStr };
 }
 
-function calcEMA(data, period) {
-    const k = 2 / (period + 1);
-    const ema = [data[0]];
-    for (let i = 1; i < data.length; i++) {
-        ema[i] = data[i] * k + ema[i - 1] * (1 - k);
-    }
-    return ema;
-}
+async function fetchHighestPriceInRange(code, buyDate, sellDate) {
+    const isShanghai = code.startsWith('6') || code.startsWith('9') || code.startsWith('5');
+    const suffix = isShanghai ? 'sh' : 'sz';
+    const symbol = suffix + code;
 
-function calcMACD(closes, fast, slow, signal) {
-    const emaFast = calcEMA(closes, fast);
-    const emaSlow = calcEMA(closes, slow);
-    const dif = closes.map((_, i) => emaFast[i] - emaSlow[i]);
-    const dea = calcEMA(dif, signal);
-    const hist = dif.map((d, i) => (d - dea[i]) * 2);
-    return { dif: dif.map(v => +v.toFixed(4)), dea: dea.map(v => +v.toFixed(4)), hist: hist.map(v => +v.toFixed(4)) };
+    const today = new Date();
+    const calendarDaysDiff = Math.max(1, Math.ceil((today - new Date(buyDate)) / (24 * 60 * 60 * 1000)));
+    const datalen = Math.min(Math.max(calendarDaysDiff + 30, 60), 1000);
+
+    const apiUrl = 'http://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData?symbol=' + symbol + '&scale=240&ma=no&datalen=' + datalen;
+    const response = await axios.get(apiUrl, {
+        timeout: 15000, headers: { 'User-Agent': 'Mozilla/5.0', 'Referer': 'https://finance.sina.com.cn/' }
+    });
+    if (!Array.isArray(response.data) || response.data.length === 0) {
+        throw new Error('未获取到日线数据');
+    }
+
+    const allKlines = response.data.sort((a, b) => new Date(a.day) - new Date(b.day));
+    const allDates = [...new Set(allKlines.map(k => k.day.split(' ')[0]))].sort();
+
+    let adjustedBuyDate = buyDate;
+    if (!allDates.includes(adjustedBuyDate)) {
+        const laterDates = allDates.filter(d => d >= adjustedBuyDate);
+        if (laterDates.length === 0) {
+            throw new Error('未找到 ' + buyDate + ' 之后的交易日K线数据');
+        }
+        adjustedBuyDate = laterDates[0];
+    }
+
+    let adjustedSellDate = sellDate;
+    const sellDateObj = new Date(sellDate);
+    if (sellDateObj > today) {
+        adjustedSellDate = allDates[allDates.length - 1];
+    } else if (!allDates.includes(adjustedSellDate)) {
+        const earlierDates = allDates.filter(d => d <= adjustedSellDate);
+        if (earlierDates.length === 0) {
+            throw new Error('未找到 ' + sellDate + ' 之前的交易日K线数据');
+        }
+        adjustedSellDate = earlierDates[earlierDates.length - 1];
+    }
+
+    const filtered = allKlines.filter(k => {
+        const d = k.day.split(' ')[0];
+        return d >= adjustedBuyDate && d <= adjustedSellDate;
+    });
+
+    if (filtered.length === 0) {
+        throw new Error('未找到 ' + buyDate + ' 至 ' + sellDate + ' 期间的K线数据');
+    }
+
+    const highestPrice = Math.max(...filtered.map(k => parseFloat(k.high)));
+    const actualDates = [...new Set(filtered.map(k => k.day.split(' ')[0]))].sort();
+
+    const warnings = [];
+    if (adjustedBuyDate !== buyDate) {
+        const gapDays = Math.ceil((new Date(adjustedBuyDate) - new Date(buyDate)) / (24 * 60 * 60 * 1000));
+        if (gapDays > 7) {
+            warnings.push('买入日期 ' + buyDate + ' 为非交易日，实际起始交易日为 ' + adjustedBuyDate + '，间隔 ' + gapDays + ' 天');
+        }
+    }
+    if (adjustedSellDate !== sellDate && sellDateObj <= today) {
+        const gapDays = Math.ceil((new Date(sellDate) - new Date(adjustedSellDate)) / (24 * 60 * 60 * 1000));
+        if (gapDays > 7) {
+            warnings.push('卖出日期 ' + sellDate + ' 为非交易日，实际结束交易日为 ' + adjustedSellDate + '，间隔 ' + gapDays + ' 天');
+        }
+    }
+    if (sellDateObj > today) {
+        warnings.push('卖出日期 ' + sellDate + ' 在未来，数据仅覆盖至最新交易日 ' + adjustedSellDate);
+    }
+
+    const earliestDate = actualDates[0];
+    const earliestGapDays = Math.ceil((new Date(earliestDate) - new Date(adjustedBuyDate)) / (24 * 60 * 60 * 1000));
+    if (earliestGapDays > 10) {
+        warnings.push('可能因数据长度限制导致早期数据缺失，实际起始交易日为 ' + earliestDate + '，与买入日期差距 ' + earliestGapDays + ' 天');
+    }
+
+    return { highestPrice, actualDates, count: filtered.length, adjustedBuyDate, adjustedSellDate, warnings, partialCoverage: sellDateObj > today };
 }
 
 function parseKlineData(klines) {
-    const dates = [], ohlc = [], closes = [];
+    const dates = [], ohlc = [], volumes = [];
     klines.forEach(k => {
         const o=+k.open, c=+k.close, h=+k.high, l=+k.low;
         dates.push(k.day.split(' ')[0]);
         ohlc.push([o, c, l, h]);
-        closes.push(c);
+        volumes.push({ value:+k.volume, itemStyle:{ color:c>=o?'rgba(239,68,68,0.8)':'rgba(34,197,94,0.8)' }});
     });
-    const macd = calcMACD(closes, 12, 26, 9);
-    return { dates, ohlc, macd };
+    return { dates, ohlc, volumes };
 }
 
 async function generateKlinePNG(data, cost, code, date) {
-    const { dates, ohlc, macd } = data;
+    const { dates, ohlc, volumes } = data;
     const canvas = createCanvas(1200, 800);
     const chart = echarts.init(canvas, null, { renderer:'canvas' });
     await chart.setOption({
@@ -176,9 +237,7 @@ async function generateKlinePNG(data, cost, code, date) {
         ],
         series:[
             { type:'candlestick', data:ohlc, itemStyle:{color:'#ef4444',color0:'#22c55e',borderColor:'#ef4444',borderColor0:'#22c55e'}, markLine:{ symbol:['none','none'], label:{show:true,position:'insideStartTop',color:'#fbbf24',backgroundColor:'rgba(13,17,23,0.8)',padding:[3,6],fontFamily:FONT_FAMILY}, lineStyle:{color:'#fbbf24',type:'dashed',width:1.5}, data:[{yAxis:+cost.toFixed(2),label:{formatter:'成本 '+cost}}] }},
-            { name:'MACD', type:'bar', xAxisIndex:1, yAxisIndex:1, data: macd.hist.map(v => ({ value:v, itemStyle:{ color: v>=0?'rgba(239,68,68,0.8)':'rgba(34,197,94,0.8)' } })), barWidth:'60%' },
-            { name:'DIF', type:'line', xAxisIndex:1, yAxisIndex:1, data:macd.dif, showSymbol:false, lineStyle:{ color:'#ffffff', width:1 } },
-            { name:'DEA', type:'line', xAxisIndex:1, yAxisIndex:1, data:macd.dea, showSymbol:false, lineStyle:{ color:'#fbbf24', width:1 } }
+            { type:'bar', xAxisIndex:1, yAxisIndex:1, data:volumes, barWidth:'60%' }
         ]
     });
     const buf = chart.getZr().dom.toBuffer('image/png', { compressionLevel: 9 });
@@ -231,6 +290,24 @@ async function updateBitableRecord(recordId, fileToken) {
     } catch (error) {
         console.error('更新飞书记录失败:', error.response?.data || error.message);
         throw new Error('更新记录失败: ' + (error.response?.data?.msg || error.message));
+    }
+}
+
+async function updateBitableField(recordId, fieldName, fieldValue) {
+    const token = await getAccessToken();
+    const url = 'https://open.feishu.cn/open-apis/bitable/v1/apps/' + FEISHU_CONFIG.bitable_app_token + '/tables/' + FEISHU_CONFIG.table_id + '/records/' + recordId;
+    try {
+        const response = await axios.put(url, {
+            fields: { [fieldName]: fieldValue }
+        }, {
+            headers: { Authorization: 'Bearer '+token, 'Content-Type': 'application/json' },
+            timeout: 30000
+        });
+        if (response.data && response.data.code === 0) return response.data.data;
+        throw new Error(response.data.msg || '更新字段失败');
+    } catch (error) {
+        console.error('更新字段失败:', error.response?.data || error.message);
+        throw new Error('更新字段失败: ' + (error.response?.data?.msg || error.message));
     }
 }
 
@@ -293,8 +370,56 @@ app.get('/api/chart', async (req, res) => {
     }
 });
 
+app.get('/api/period-high', async (req, res) => {
+    var rid = req.query.record_id;
+    var code = req.query.code;
+    var buyDate = req.query.buy_date;
+    var sellDate = req.query.sell_date;
+    console.log('[API /api/period-high] 入参: record_id=' + rid + ', code=' + code + ', buy_date=' + buyDate + ', sell_date=' + sellDate);
+    if (!rid || !code || !buyDate || !sellDate) {
+        return res.status(400).json({ error: '缺少必要参数', required: ['record_id','code','buy_date','sell_date'] });
+    }
+    if (!/^\d{6}$/.test(code)) return res.status(400).json({ error: '股票代码格式不正确' });
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(buyDate)) return res.status(400).json({ error: '买入日期格式不正确' });
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(sellDate)) return res.status(400).json({ error: '卖出日期格式不正确' });
+    if (new Date(buyDate) > new Date(sellDate)) return res.status(400).json({ error: '买入日期不能晚于卖出日期' });
+
+    try {
+        console.log('['+code+'] 获取 '+buyDate+' 至 '+sellDate+' 期间最高价...');
+        var result = await fetchHighestPriceInRange(code, buyDate, sellDate);
+        console.log('['+code+'] 期间最高价: '+result.highestPrice+', 实际交易日: '+result.actualDates.join(', '));
+        if (result.warnings.length > 0) {
+            console.warn('['+code+'] 警告:', result.warnings);
+        }
+
+        var fieldValue = parseFloat(result.highestPrice.toFixed(2));
+        var fieldName = FEISHU_CONFIG.period_high_field;
+        console.log('['+code+'] 更新记录 '+rid+' 的 ['+fieldName+'] 字段为: '+fieldValue);
+        await updateBitableField(rid, fieldName, fieldValue);
+        console.log('['+code+'] 记录更新成功!');
+
+        return res.json({
+            success: true,
+            record_id: rid,
+            code: code,
+            buy_date: buyDate,
+            sell_date: sellDate,
+            adjusted_buy_date: result.adjustedBuyDate,
+            adjusted_sell_date: result.adjustedSellDate,
+            highest_price: fieldValue,
+            actual_trading_dates: result.actualDates,
+            trading_days_count: result.count,
+            partial_coverage: result.partialCoverage,
+            warnings: result.warnings
+        });
+    } catch (error) {
+        console.error('['+code+'] 处理失败:', error.message);
+        return res.status(500).json({ success: false, error: error.message, code: code, record_id: rid });
+    }
+});
+
 app.get('/api/test', function(req, res) {
-    res.json({ message: '飞书K线图服务运行正常', usage: '/api/chart?record_id=recXXXXX&code=600519&date=2024-01-15&cost=1800.50' });
+    res.json({ message: '飞书K线图服务运行正常', usage: '/api/chart?record_id=recXXXXX&code=600519&date=2024-01-15&cost=1800.50, /api/period-high?record_id=recXXXXX&code=600519&buy_date=2024-01-01&sell_date=2024-03-31' });
 });
 
 app.get('/', function(req, res) {
@@ -304,4 +429,5 @@ app.get('/', function(req, res) {
 app.listen(PORT, function() {
     console.log('Server running on port ' + PORT);
     console.log('API: http://localhost:'+PORT+'/api/chart?record_id=recXXXXX&code=600519&date=2024-01-15&cost=1800.50');
+    console.log('API: http://localhost:'+PORT+'/api/period-high?record_id=recXXXXX&code=600519&buy_date=2024-01-01&sell_date=2024-03-31');
 });
