@@ -132,32 +132,50 @@ async function fetchKlineData(code, date) {
 }
 
 async function fetchDailyKlineData(code, date, priorDays = 49) {
+    // 东方财富前复权日线接口，和通达信一致
     const isShanghai = code.startsWith('6') || code.startsWith('9') || code.startsWith('5');
-    const suffix = isShanghai ? 'sh' : 'sz';
-    const symbol = suffix + code;
+    const market = isShanghai ? '1' : '0';
+    const secid = market + '.' + code;
 
-    // 动态计算 datalen：确保覆盖输入日期及其前 priorDays 个交易日
-    // 按 5/7 比例估算交易日，加 30 根缓冲（覆盖节假日）
+    // 确保有足够数据用于MA200计算 + 展示50根 + 输入日期到今天的量 + 缓冲
     const today = new Date();
     const inputDate = new Date(date);
     const calendarDaysDiff = Math.max(1, Math.ceil((today - inputDate) / (24 * 60 * 60 * 1000)));
-    const estimatedBars = Math.ceil(calendarDaysDiff * 5 / 7) + priorDays + 30;
-    const datalen = Math.min(Math.max(estimatedBars, 60), 3000);
+    const estimatedTradingDays = Math.ceil(calendarDaysDiff * 5 / 7);
+    // 至少要保证 MA200 有数据：200 + priorDays（用于计算MA的前置数据）
+    const minLmt = 200 + priorDays + estimatedTradingDays + 50;
+    const lmt = Math.max(minLmt, 800);
 
-    const apiUrl = 'http://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData?symbol=' + symbol + '&scale=240&ma=no&datalen=' + datalen;
+    const apiUrl = 'http://push2his.eastmoney.com/api/qt/stock/kline/get?secid=' + secid +
+        '&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61' +
+        '&klt=101&fqt=1&end=20500101&lmt=' + lmt;
     const response = await axios.get(apiUrl, {
-        timeout: 15000, headers: { 'User-Agent': 'Mozilla/5.0', 'Referer': 'https://finance.sina.com.cn/' }
+        timeout: 15000,
+        headers: { 'User-Agent': 'Mozilla/5.0', 'Referer': 'https://quote.eastmoney.com/' }
     });
-    if (!Array.isArray(response.data) || response.data.length === 0) {
+    const payload = response.data;
+    if (!payload || !payload.data || !Array.isArray(payload.data.klines) || payload.data.klines.length === 0) {
         throw new Error('未获取到日线数据');
     }
 
-    const allKlines = response.data.sort((a, b) => new Date(a.day) - new Date(b.day));
-    const allDates = [...new Set(allKlines.map(k => k.day.split(' ')[0]))].sort();
+    // 东方财富kline格式: "日期,开,收,低,高,成交量,成交额,振幅,涨跌幅,涨跌额,换手率"
+    const allKlines = payload.data.klines.map(function(line) {
+        var parts = line.split(',');
+        return {
+            day: parts[0],
+            open: parts[1],
+            close: parts[2],
+            low: parts[3],
+            high: parts[4],
+            volume: parts[5]
+        };
+    }).sort(function(a, b) { return new Date(a.day) - new Date(b.day); });
+
+    const allDates = allKlines.map(function(k) { return k.day.split(' ')[0]; });
 
     let targetDateStr = date;
-    if (!allDates.includes(targetDateStr)) {
-        const earlierDates = allDates.filter(d => d <= targetDateStr);
+    if (allDates.indexOf(targetDateStr) === -1) {
+        var earlierDates = allDates.filter(function(d) { return d <= targetDateStr; });
         if (earlierDates.length === 0) {
             throw new Error('未找到 ' + date + ' 及其之前的交易日日线数据');
         }
@@ -166,12 +184,7 @@ async function fetchDailyKlineData(code, date, priorDays = 49) {
 
     const targetIdx = allDates.indexOf(targetDateStr);
     const startIdx = Math.max(0, targetIdx - priorDays);
-    const selectedDates = new Set(allDates.slice(startIdx, targetIdx + 1));
-
-    const filtered = allKlines.filter(k => {
-        const d = k.day.split(' ')[0];
-        return selectedDates.has(d) && d <= targetDateStr;
-    });
+    const filtered = allKlines.slice(startIdx, targetIdx + 1);
 
     if (filtered.length === 0) {
         throw new Error('未找到 ' + date + ' 及其前' + priorDays + '个交易日的日线数据');
@@ -181,24 +194,38 @@ async function fetchDailyKlineData(code, date, priorDays = 49) {
 }
 
 async function fetchHighestPriceInRange(code, buyDate, sellDate) {
+    // 东方财富前复权日线，与通达信/K线图数据源保持一致
     const isShanghai = code.startsWith('6') || code.startsWith('9') || code.startsWith('5');
-    const suffix = isShanghai ? 'sh' : 'sz';
-    const symbol = suffix + code;
+    const market = isShanghai ? '1' : '0';
+    const secid = market + '.' + code;
 
     const today = new Date();
     const calendarDaysDiff = Math.max(1, Math.ceil((today - new Date(buyDate)) / (24 * 60 * 60 * 1000)));
-    const datalen = Math.min(Math.max(calendarDaysDiff + 30, 60), 1000);
+    const lmt = Math.min(Math.max(calendarDaysDiff + 50, 200), 2000);
 
-    const apiUrl = 'http://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData?symbol=' + symbol + '&scale=240&ma=no&datalen=' + datalen;
+    const apiUrl = 'http://push2his.eastmoney.com/api/qt/stock/kline/get?secid=' + secid +
+        '&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61' +
+        '&klt=101&fqt=1&end=20500101&lmt=' + lmt;
     const response = await axios.get(apiUrl, {
-        timeout: 15000, headers: { 'User-Agent': 'Mozilla/5.0', 'Referer': 'https://finance.sina.com.cn/' }
+        timeout: 15000, headers: { 'User-Agent': 'Mozilla/5.0', 'Referer': 'https://quote.eastmoney.com/' }
     });
-    if (!Array.isArray(response.data) || response.data.length === 0) {
+    const payload = response.data;
+    if (!payload || !payload.data || !Array.isArray(payload.data.klines) || payload.data.klines.length === 0) {
         throw new Error('未获取到日线数据');
     }
 
-    const allKlines = response.data.sort((a, b) => new Date(a.day) - new Date(b.day));
-    const allDates = [...new Set(allKlines.map(k => k.day.split(' ')[0]))].sort();
+    const allKlines = payload.data.klines.map(function(line) {
+        var parts = line.split(',');
+        return {
+            day: parts[0],
+            open: parts[1],
+            close: parts[2],
+            low: parts[3],
+            high: parts[4],
+            volume: parts[5]
+        };
+    }).sort(function(a, b) { return new Date(a.day) - new Date(b.day); });
+    const allDates = allKlines.map(function(k) { return k.day.split(' ')[0]; });
 
     let adjustedBuyDate = buyDate;
     if (!allDates.includes(adjustedBuyDate)) {
