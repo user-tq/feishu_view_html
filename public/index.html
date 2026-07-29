@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>股票30分钟K线图</title>
+    <title>股票K线图</title>
     <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
     <style>
         * {
@@ -72,11 +72,22 @@
             background: rgba(248, 81, 73, 0.15);
             color: #f85149;
         }
+        .chart-section {
+            margin-bottom: 8px;
+        }
+        .chart-section-title {
+            font-size: 13px;
+            font-weight: 600;
+            color: #8b949e;
+            padding: 8px 20px 4px;
+            background: #161b22;
+            border-bottom: 1px solid #30363d;
+        }
         .chart-container {
             width: 100%;
-            height: calc(100vh - 110px);
+            height: 45vh;
         }
-        #klineChart {
+        .chart-container > div {
             width: 100%;
             height: 100%;
         }
@@ -107,7 +118,7 @@
 
     <div id="app" style="display: none;">
         <div class="header">
-            <h1 id="headerTitle">30分钟K线图</h1>
+            <h1 id="headerTitle">K线图</h1>
             <div class="stock-info">
                 <span class="stock-code" id="stockCode"></span>
                 <span class="cost-badge" id="costBadge"></span>
@@ -115,8 +126,17 @@
             </div>
         </div>
         <div id="uploadStatus" class="status"></div>
-        <div class="chart-container">
-            <div id="klineChart"></div>
+        <div class="chart-section">
+            <div class="chart-section-title">日K线</div>
+            <div class="chart-container">
+                <div id="dailyKlineChart"></div>
+            </div>
+        </div>
+        <div class="chart-section">
+            <div class="chart-section-title">30分钟K线</div>
+            <div class="chart-container">
+                <div id="klineChart"></div>
+            </div>
         </div>
     </div>
 
@@ -144,17 +164,30 @@
 
         async function uploadChart(recordId, code, date, cost) {
             const statusEl = document.getElementById('uploadStatus');
-            setStatus(statusEl, 'loading', '正在生成K线图并上传至飞书...');
+            setStatus(statusEl, 'loading', '正在生成日线和30分钟K线图并上传至飞书...');
             try {
                 const response = await fetch(`/api/chart?record_id=${encodeURIComponent(recordId)}&code=${encodeURIComponent(code)}&date=${encodeURIComponent(date)}&cost=${encodeURIComponent(cost)}`);
                 const result = await response.json();
                 if (result.success) {
-                    setStatus(statusEl, 'success', `已上传至飞书记录 ${recordId}（${result.klines_count} 根K线）`);
+                    setStatus(statusEl, 'success', `已上传至飞书记录 ${recordId}（日K ${result.klines_daily_count} 根，30分K ${result.klines_30m_count} 根）`);
                 } else {
                     setStatus(statusEl, 'error', `上传失败：${result.error || '未知错误'}`);
                 }
             } catch (err) {
                 setStatus(statusEl, 'error', `上传失败：${err.message}`);
+            }
+        }
+
+        async function loadDailyChart(code, date, cost) {
+            try {
+                const response = await fetch(`/api/daily-kline?code=${encodeURIComponent(code)}&date=${encodeURIComponent(date)}`);
+                const result = await response.json();
+                if (!result.success || !result.klines || result.klines.length === 0) {
+                    throw new Error(result.error || '未获取到日线数据');
+                }
+                renderChart(result.klines, parseFloat(cost), 'dailyKlineChart');
+            } catch (err) {
+                document.getElementById('dailyKlineChart').innerHTML = `<div class="center-message error"><p>加载日线数据失败</p><p>${err.message}</p></div>`;
             }
         }
 
@@ -164,7 +197,7 @@
 
             document.getElementById('stockCode').textContent = code;
             document.getElementById('costBadge').textContent = `成本 ${parseFloat(cost).toFixed(2)}`;
-            document.getElementById('headerTitle').textContent = `${code} 30分钟K线图`;
+            document.getElementById('headerTitle').textContent = `${code} K线图`;
             document.getElementById('dateRange').textContent = `${formatDate(fiveDaysAgo)} ~ ${formatDate(targetDate)}`;
 
             try {
@@ -173,13 +206,13 @@
                 if (!result.success || !result.klines || result.klines.length === 0) {
                     throw new Error(result.error || '未获取到K线数据');
                 }
-                renderChart(result.klines, parseFloat(cost));
+                renderChart(result.klines, parseFloat(cost), 'klineChart');
             } catch (err) {
                 document.getElementById('klineChart').innerHTML = `<div class="center-message error"><p>加载K线数据失败</p><p>${err.message}</p></div>`;
             }
         }
 
-        function renderChart(klines, cost) {
+        function renderChart(klines, cost, containerId) {
             const dates = [];
             const ohlc = [];
             const volumes = [];
@@ -194,7 +227,7 @@
                 });
             });
 
-            const chartDom = document.getElementById('klineChart');
+            const chartDom = document.getElementById(containerId);
             const myChart = echarts.init(chartDom);
 
             const option = {
@@ -208,7 +241,7 @@
                     label: { backgroundColor: '#30363d' }
                 },
                 grid: [
-                    { left: '60', right: '40', top: '50', height: '55%' },
+                    { left: '60', right: '40', top: '30', height: '55%' },
                     { left: '60', right: '40', top: '62%', height: '15%' }
                 ],
                 xAxis: [
@@ -245,7 +278,7 @@
                 ],
                 dataZoom: [
                     { type: 'inside', xAxisIndex: [0, 1], start: 0, end: 100 },
-                    { type: 'slider', xAxisIndex: [0, 1], start: 0, end: 100, bottom: 10, borderColor: '#30363d', fillerColor: 'rgba(31,111,235,0.2)', handleStyle: { color: '#1f6feb' }, textStyle: { color: '#8b949e' } }
+                    { type: 'slider', xAxisIndex: [0, 1], start: 0, end: 100, bottom: 5, borderColor: '#30363d', fillerColor: 'rgba(31,111,235,0.2)', handleStyle: { color: '#1f6feb' }, textStyle: { color: '#8b949e' } }
                 ],
                 series: [
                     {
@@ -309,6 +342,7 @@
             }
 
             document.getElementById('app').style.display = 'block';
+            loadDailyChart(code, date, cost);
             loadChart(code, date, cost);
             uploadChart(recordId, code, date, cost);
         }

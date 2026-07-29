@@ -114,15 +114,67 @@ async function fetchKlineData(code, date) {
         targetDateStr = earlierDates[earlierDates.length - 1];
     }
 
-    // 取目标交易日及其前 5 个交易日（共 6 个交易日）
+    // 取目标交易日及其前 5 个交易日（共 6 个交易日），并严格排除超出目标日期的K柱
     const targetIdx = allDates.indexOf(targetDateStr);
     const startIdx = Math.max(0, targetIdx - 5);
     const selectedDates = new Set(allDates.slice(startIdx, targetIdx + 1));
 
-    const filtered = allKlines.filter(k => selectedDates.has(k.day.split(' ')[0]));
+    const filtered = allKlines.filter(k => {
+        const d = k.day.split(' ')[0];
+        return selectedDates.has(d) && d <= targetDateStr;
+    });
 
     if (filtered.length === 0) {
         throw new Error('未找到 ' + date + ' 及其前5个交易日的K线数据');
+    }
+
+    return { klines: filtered, targetDate: targetDateStr };
+}
+
+async function fetchDailyKlineData(code, date, priorDays = 49) {
+    const isShanghai = code.startsWith('6') || code.startsWith('9') || code.startsWith('5');
+    const suffix = isShanghai ? 'sh' : 'sz';
+    const symbol = suffix + code;
+
+    // 动态计算 datalen：确保覆盖输入日期及其前 priorDays 个交易日
+    // 按 5/7 比例估算交易日，加 30 根缓冲（覆盖节假日）
+    const today = new Date();
+    const inputDate = new Date(date);
+    const calendarDaysDiff = Math.max(1, Math.ceil((today - inputDate) / (24 * 60 * 60 * 1000)));
+    const estimatedBars = Math.ceil(calendarDaysDiff * 5 / 7) + priorDays + 30;
+    const datalen = Math.min(Math.max(estimatedBars, 60), 3000);
+
+    const apiUrl = 'http://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData?symbol=' + symbol + '&scale=240&ma=no&datalen=' + datalen;
+    const response = await axios.get(apiUrl, {
+        timeout: 15000, headers: { 'User-Agent': 'Mozilla/5.0', 'Referer': 'https://finance.sina.com.cn/' }
+    });
+    if (!Array.isArray(response.data) || response.data.length === 0) {
+        throw new Error('未获取到日线数据');
+    }
+
+    const allKlines = response.data.sort((a, b) => new Date(a.day) - new Date(b.day));
+    const allDates = [...new Set(allKlines.map(k => k.day.split(' ')[0]))].sort();
+
+    let targetDateStr = date;
+    if (!allDates.includes(targetDateStr)) {
+        const earlierDates = allDates.filter(d => d <= targetDateStr);
+        if (earlierDates.length === 0) {
+            throw new Error('未找到 ' + date + ' 及其之前的交易日日线数据');
+        }
+        targetDateStr = earlierDates[earlierDates.length - 1];
+    }
+
+    const targetIdx = allDates.indexOf(targetDateStr);
+    const startIdx = Math.max(0, targetIdx - priorDays);
+    const selectedDates = new Set(allDates.slice(startIdx, targetIdx + 1));
+
+    const filtered = allKlines.filter(k => {
+        const d = k.day.split(' ')[0];
+        return selectedDates.has(d) && d <= targetDateStr;
+    });
+
+    if (filtered.length === 0) {
+        throw new Error('未找到 ' + date + ' 及其前' + priorDays + '个交易日的日线数据');
     }
 
     return { klines: filtered, targetDate: targetDateStr };
@@ -218,13 +270,13 @@ function parseKlineData(klines) {
     return { dates, ohlc, volumes };
 }
 
-async function generateKlinePNG(data, cost, code, date) {
+async function generateKlinePNG(data, cost, code, date, title) {
     const { dates, ohlc, volumes } = data;
     const canvas = createCanvas(1200, 800);
     const chart = echarts.init(canvas, null, { renderer:'canvas' });
     await chart.setOption({
         backgroundColor:'#0d1117',
-        title:{ text: code + ' ' + date + ' 30分K', left:'center', top:10, textStyle:{ color:'#e6edf3', fontSize:18, fontFamily:FONT_FAMILY }},
+        title:{ text: title || (code + ' ' + date + ' 30分K'), left:'center', top:10, textStyle:{ color:'#e6edf3', fontSize:18, fontFamily:FONT_FAMILY }},
         tooltip:{ trigger:'axis', axisPointer:{ type:'cross' }},
         grid:[{ left:'60', right:'40', top:'50', height:'55%' },{ left:'60', right:'40', top:'62%', height:'15%' }],
         xAxis:[
@@ -275,12 +327,13 @@ async function uploadFileToFeishu(fileBuffer, filename) {
     }
 }
 
-async function updateBitableRecord(recordId, fileToken) {
+async function updateBitableRecord(recordId, fileTokens) {
     const token = await getAccessToken();
     const url = 'https://open.feishu.cn/open-apis/bitable/v1/apps/' + FEISHU_CONFIG.bitable_app_token + '/tables/' + FEISHU_CONFIG.table_id + '/records/' + recordId;
+    const tokens = Array.isArray(fileTokens) ? fileTokens : [fileTokens];
     try {
         const response = await axios.put(url, {
-            fields: { kline_chart: [{ file_token: fileToken }] }
+            fields: { kline_chart: tokens.map(t => ({ file_token: t })) }
         }, {
             headers: { Authorization: 'Bearer '+token, 'Content-Type': 'application/json' },
             timeout: 30000
@@ -329,6 +382,25 @@ app.get('/api/kline', async (req, res) => {
     }
 });
 
+app.get('/api/daily-kline', async (req, res) => {
+    var code = req.query.code;
+    var date = req.query.date;
+    var priorDays = parseInt(req.query.prior_days) || 49;
+    console.log('[API /api/daily-kline] 入参: code=' + code + ', date=' + date + ', prior_days=' + priorDays);
+    if (!code || !date) {
+        return res.status(400).json({ error: '缺少必要参数', required: ['code','date'] });
+    }
+    if (!/^\d{6}$/.test(code)) return res.status(400).json({ error: '股票代码格式不正确' });
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: '日期格式不正确' });
+    try {
+        var klineData = await fetchDailyKlineData(code, date, priorDays);
+        return res.json({ success: true, code: code, date: date, targetDate: klineData.targetDate, klines: klineData.klines });
+    } catch (error) {
+        console.error('['+code+'] 获取日线数据失败:', error.message);
+        return res.status(500).json({ success: false, error: error.message, code: code, date: date });
+    }
+});
+
 app.get('/api/chart', async (req, res) => {
     var rid = req.query.record_id;
     var code = req.query.code;
@@ -343,29 +415,58 @@ app.get('/api/chart', async (req, res) => {
     if (isNaN(parseFloat(cost))) return res.status(400).json({ error: '买入价格必须为数字' });
 
     var buyCost = parseFloat(cost);
-    var fileToken = null;
+    var tmpFiles = [];
     try {
-        console.log('['+code+'] 获取K线数据...');
-        var klineData = await fetchKlineData(code, date);
-        console.log('['+code+'] 获取到 '+klineData.klines.length+' 根K线');
-        var parsedData = parseKlineData(klineData.klines);
+        // 并行获取30分钟和日线K线数据
+        console.log('['+code+'] 获取30分钟和日线K线数据...');
+        var [klineData30m, klineDataDaily] = await Promise.all([
+            fetchKlineData(code, date),
+            fetchDailyKlineData(code, date, 49)
+        ]);
+        console.log('['+code+'] 获取到 30分钟K线 '+klineData30m.klines.length+' 根, 日线 '+klineDataDaily.klines.length+' 根');
+
+        var parsed30m = parseKlineData(klineData30m.klines);
+        var parsedDaily = parseKlineData(klineDataDaily.klines);
+
+        // 生成两张K线图
         console.log('['+code+'] 生成K线图...');
-        var pngBuffer = await generateKlinePNG(parsedData, buyCost, code, date);
-        console.log('['+code+'] K线图生成成功，大小: '+pngBuffer.length+' bytes');
-        var tmpFile = path.join(TMP_DIR, code+'_'+date+'_kline.png');
-        fs.writeFileSync(tmpFile, pngBuffer);
+        var [png30m, pngDaily] = await Promise.all([
+            generateKlinePNG(parsed30m, buyCost, code, date, code + ' ' + date + ' 30分K'),
+            generateKlinePNG(parsedDaily, buyCost, code, date, code + ' ' + date + ' 日K')
+        ]);
+        console.log('['+code+'] 30分K图 '+png30m.length+' bytes, 日K图 '+pngDaily.length+' bytes');
+
+        var tmp30m = path.join(TMP_DIR, code+'_'+date+'_30m_kline.png');
+        var tmpDaily = path.join(TMP_DIR, code+'_'+date+'_daily_kline.png');
+        fs.writeFileSync(tmp30m, png30m);
+        fs.writeFileSync(tmpDaily, pngDaily);
+        tmpFiles.push(tmp30m, tmpDaily);
+
+        // 上传两张图到飞书
         console.log('['+code+'] 上传到飞书...');
-        fileToken = await uploadFileToFeishu(pngBuffer, code+'_'+date+'_kline.png');
-        console.log('['+code+'] 文件上传成功，file_token: '+fileToken);
+        var [token30m, tokenDaily] = await Promise.all([
+            uploadFileToFeishu(png30m, code+'_'+date+'_30m_kline.png'),
+            uploadFileToFeishu(pngDaily, code+'_'+date+'_daily_kline.png')
+        ]);
+        console.log('['+code+'] 文件上传成功, 30分K token: '+token30m+', 日K token: '+tokenDaily);
+
+        // 更新记录（两张图作为附件）
         console.log('['+code+'] 更新记录 '+rid+'...');
-        await updateBitableRecord(rid, fileToken);
+        await updateBitableRecord(rid, [token30m, tokenDaily]);
         console.log('['+code+'] 记录更新成功!');
-        if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile);
-        return res.json({ success: true, message: 'K线图已生成并上传', record_id: rid, file_token: fileToken, klines_count: klineData.klines.length });
+
+        tmpFiles.forEach(f => { if (fs.existsSync(f)) fs.unlinkSync(f); });
+        return res.json({
+            success: true,
+            message: '日线和30分钟K线图已生成并上传',
+            record_id: rid,
+            file_tokens: [token30m, tokenDaily],
+            klines_30m_count: klineData30m.klines.length,
+            klines_daily_count: klineDataDaily.klines.length
+        });
     } catch (error) {
         console.error('['+code+'] 处理失败:', error.message);
-        var tf = path.join(TMP_DIR, code+'_'+date+'.png');
-        if (fs.existsSync(tf)) fs.unlinkSync(tf);
+        tmpFiles.forEach(f => { if (fs.existsSync(f)) fs.unlinkSync(f); });
         return res.status(500).json({ success: false, error: error.message, code: code, record_id: rid });
     }
 });
@@ -419,7 +520,7 @@ app.get('/api/period-high', async (req, res) => {
 });
 
 app.get('/api/test', function(req, res) {
-    res.json({ message: '飞书K线图服务运行正常', usage: '/api/chart?record_id=recXXXXX&code=600519&date=2024-01-15&cost=1800.50, /api/period-high?record_id=recXXXXX&code=600519&buy_date=2024-01-01&sell_date=2024-03-31' });
+    res.json({ message: '飞书K线图服务运行正常', usage: '/api/chart?record_id=recXXXXX&code=600519&date=2024-01-15&cost=1800.50 (生成日线+30分钟K线图), /api/kline?code=600519&date=2024-01-15 (30分钟K线数据), /api/daily-kline?code=600519&date=2024-01-15 (日线数据), /api/period-high?record_id=recXXXXX&code=600519&buy_date=2024-01-01&sell_date=2024-03-31' });
 });
 
 app.get('/', function(req, res) {
