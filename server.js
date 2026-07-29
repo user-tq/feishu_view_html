@@ -428,12 +428,11 @@ app.get('/api/chart', async (req, res) => {
         var parsed30m = parseKlineData(klineData30m.klines);
         var parsedDaily = parseKlineData(klineDataDaily.klines);
 
-        // 生成两张K线图
-        console.log('['+code+'] 生成K线图...');
-        var [png30m, pngDaily] = await Promise.all([
-            generateKlinePNG(parsed30m, buyCost, code, date, code + ' ' + date + ' 30分K'),
-            generateKlinePNG(parsedDaily, buyCost, code, date, code + ' ' + date + ' 日K')
-        ]);
+        // 顺序生成两张K线图（并发会导致 node-canvas 字体渲染冲突，中文变方块）
+        console.log('['+code+'] 生成30分K线图...');
+        var png30m = await generateKlinePNG(parsed30m, buyCost, code, date, code + ' ' + date + ' 30分K');
+        console.log('['+code+'] 生成日K线图...');
+        var pngDaily = await generateKlinePNG(parsedDaily, buyCost, code, date, code + ' ' + date + ' 日K');
         console.log('['+code+'] 30分K图 '+png30m.length+' bytes, 日K图 '+pngDaily.length+' bytes');
 
         var tmp30m = path.join(TMP_DIR, code+'_'+date+'_30m_kline.png');
