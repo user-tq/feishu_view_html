@@ -534,7 +534,7 @@ app.get('/api/chart', async (req, res) => {
             record_id: rid,
             file_tokens: [token30m, tokenDaily],
             klines_30m_count: klineData30m.klines.length,
-            klines_daily_count: klineDataDaily.klines.length
+            klines_daily_count: parsedDaily.dates.length
         });
     } catch (error) {
         console.error('['+code+'] 处理失败:', error.message);
