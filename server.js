@@ -270,15 +270,50 @@ function parseKlineData(klines) {
     return { dates, ohlc, volumes };
 }
 
-async function generateKlinePNG(data, cost, code, date, title) {
+function calculateMA(closes, period) {
+    var ma = [];
+    for (var i = 0; i < closes.length; i++) {
+        if (i < period - 1) {
+            ma.push(null);
+        } else {
+            var sum = 0;
+            for (var j = i - period + 1; j <= i; j++) sum += closes[j];
+            ma.push(+(sum / period).toFixed(2));
+        }
+    }
+    return ma;
+}
+
+async function generateKlinePNG(data, cost, code, date, title, maData) {
     const { dates, ohlc, volumes } = data;
     const canvas = createCanvas(1200, 800);
     const chart = echarts.init(canvas, null, { renderer:'canvas' });
+
+    var series = [
+        { type:'candlestick', data:ohlc, itemStyle:{color:'#ef4444',color0:'#22c55e',borderColor:'#ef4444',borderColor0:'#22c55e'}, markLine:{ symbol:['none','none'], label:{show:true,position:'insideStartTop',color:'#fbbf24',backgroundColor:'rgba(13,17,23,0.8)',padding:[3,6],fontFamily:FONT_FAMILY}, lineStyle:{color:'#fbbf24',type:'dashed',width:1.5}, data:[{yAxis:+cost.toFixed(2),label:{formatter:'成本 '+cost}}] }},
+        { type:'bar', xAxisIndex:1, yAxisIndex:1, data:volumes, barWidth:'60%' }
+    ];
+    if (maData && maData.length > 0) {
+        maData.forEach(function(ma) {
+            series.push({
+                type:'line', data:ma.data, smooth:true, symbol:'none',
+                lineStyle:{ color:ma.color, width:1.5 }, name:ma.name, z:5,
+                emphasis: { focus: 'series' },
+                label: { show: false }
+            });
+        });
+    }
+
     await chart.setOption({
         backgroundColor:'#0d1117',
         title:{ text: title || (code + ' ' + date + ' 30分K'), left:'center', top:10, textStyle:{ color:'#e6edf3', fontSize:18, fontFamily:FONT_FAMILY }},
         tooltip:{ trigger:'axis', axisPointer:{ type:'cross' }},
-        grid:[{ left:'60', right:'40', top:'50', height:'55%' },{ left:'60', right:'40', top:'62%', height:'15%' }],
+        legend: maData && maData.length > 0 ? {
+            data: maData.map(function(m){ return m.name; }),
+            textStyle:{ color:'#8b949e', fontFamily:FONT_FAMILY, fontSize:11 },
+            top:36, right:50, itemWidth:14, itemHeight:8
+        } : undefined,
+        grid:[{ left:'60', right:'40', top: maData ? '60' : '50', height: maData ? '50%' : '55%' },{ left:'60', right:'40', top:'68%', height:'13%' }],
         xAxis:[
             { type:'category', data:dates, scale:true, boundaryGap:true, axisLine:{ lineStyle:{color:'#30363d'} }, splitLine:{show:false}, axisLabel:{color:'#8b949e', fontFamily:FONT_FAMILY, formatter:v=>v.split('-').slice(1).join('-')} },
             { type:'category', gridIndex:1, data:dates, axisLabel:{show:false} }
@@ -287,10 +322,7 @@ async function generateKlinePNG(data, cost, code, date, title) {
             { scale:true, splitArea:{show:true, areaStyle:{color:['rgba(13,17,23,0.3)','rgba(22,27,34,0.3)']}}, axisLine:{lineStyle:{color:'#30363d'}}, splitLine:{show:true,lineStyle:{color:'#21262d'}}, axisLabel:{color:'#8b949e', fontFamily:FONT_FAMILY} },
             { gridIndex:1, splitNumber:2, axisLabel:{show:false}, splitLine:{show:false} }
         ],
-        series:[
-            { type:'candlestick', data:ohlc, itemStyle:{color:'#ef4444',color0:'#22c55e',borderColor:'#ef4444',borderColor0:'#22c55e'}, markLine:{ symbol:['none','none'], label:{show:true,position:'insideStartTop',color:'#fbbf24',backgroundColor:'rgba(13,17,23,0.8)',padding:[3,6],fontFamily:FONT_FAMILY}, lineStyle:{color:'#fbbf24',type:'dashed',width:1.5}, data:[{yAxis:+cost.toFixed(2),label:{formatter:'成本 '+cost}}] }},
-            { type:'bar', xAxisIndex:1, yAxisIndex:1, data:volumes, barWidth:'60%' }
-        ]
+        series: series
     });
     const buf = chart.getZr().dom.toBuffer('image/png', { compressionLevel: 9 });
     chart.dispose();
@@ -386,15 +418,37 @@ app.get('/api/daily-kline', async (req, res) => {
     var code = req.query.code;
     var date = req.query.date;
     var priorDays = parseInt(req.query.prior_days) || 49;
-    console.log('[API /api/daily-kline] 入参: code=' + code + ', date=' + date + ', prior_days=' + priorDays);
+    var withMA = req.query.ma === '1';
+    console.log('[API /api/daily-kline] 入参: code=' + code + ', date=' + date + ', prior_days=' + priorDays + ', ma=' + withMA);
     if (!code || !date) {
         return res.status(400).json({ error: '缺少必要参数', required: ['code','date'] });
     }
     if (!/^\d{6}$/.test(code)) return res.status(400).json({ error: '股票代码格式不正确' });
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: '日期格式不正确' });
     try {
-        var klineData = await fetchDailyKlineData(code, date, priorDays);
-        return res.json({ success: true, code: code, date: date, targetDate: klineData.targetDate, klines: klineData.klines });
+        // 如果需要MA，多取200根用于计算MA200
+        var fetchDays = withMA ? priorDays + 200 : priorDays;
+        var klineData = await fetchDailyKlineData(code, date, fetchDays);
+        var klines = klineData.klines;
+
+        var ma = undefined;
+        if (withMA) {
+            var parsed = parseKlineData(klines);
+            var closes = parsed.ohlc.map(function(x){ return x[1]; });
+            var ma50 = calculateMA(closes, 50);
+            var ma150 = calculateMA(closes, 150);
+            var ma200 = calculateMA(closes, 200);
+            // 截取展示范围（最后 priorDays+1 根）
+            var startIdx = klines.length - (priorDays + 1);
+            ma = {
+                MA50: ma50.slice(startIdx),
+                MA150: ma150.slice(startIdx),
+                MA200: ma200.slice(startIdx)
+            };
+            klines = klines.slice(startIdx);
+        }
+
+        return res.json({ success: true, code: code, date: date, targetDate: klineData.targetDate, klines: klines, ma: ma });
     } catch (error) {
         console.error('['+code+'] 获取日线数据失败:', error.message);
         return res.status(500).json({ success: false, error: error.message, code: code, date: date });
@@ -417,22 +471,41 @@ app.get('/api/chart', async (req, res) => {
     var buyCost = parseFloat(cost);
     var tmpFiles = [];
     try {
-        // 并行获取30分钟和日线K线数据
+        // 并行获取30分钟和日线K线数据（日线多取200根用于计算MA200）
         console.log('['+code+'] 获取30分钟和日线K线数据...');
-        var [klineData30m, klineDataDaily] = await Promise.all([
+        var [klineData30m, klineDataDailyAll] = await Promise.all([
             fetchKlineData(code, date),
-            fetchDailyKlineData(code, date, 49)
+            fetchDailyKlineData(code, date, 249)
         ]);
-        console.log('['+code+'] 获取到 30分钟K线 '+klineData30m.klines.length+' 根, 日线 '+klineDataDaily.klines.length+' 根');
+        console.log('['+code+'] 获取到 30分钟K线 '+klineData30m.klines.length+' 根, 日线(含MA前置) '+klineDataDailyAll.klines.length+' 根');
 
         var parsed30m = parseKlineData(klineData30m.klines);
-        var parsedDaily = parseKlineData(klineDataDaily.klines);
+        var parsedDailyAll = parseKlineData(klineDataDailyAll.klines);
+
+        // 用全量日线数据计算 MA50/MA150/MA200，再截取最后50根用于展示
+        var closesAll = parsedDailyAll.ohlc.map(function(x){ return x[1]; });
+        var ma50All = calculateMA(closesAll, 50);
+        var ma150All = calculateMA(closesAll, 150);
+        var ma200All = calculateMA(closesAll, 200);
+        var displayCount = 50;
+        var startIdx = parsedDailyAll.dates.length - displayCount;
+        var parsedDaily = {
+            dates: parsedDailyAll.dates.slice(startIdx),
+            ohlc: parsedDailyAll.ohlc.slice(startIdx),
+            volumes: parsedDailyAll.volumes.slice(startIdx)
+        };
+        var maData = [
+            { name:'MA50',  data: ma50All.slice(startIdx),  color:'#f59e0b' },
+            { name:'MA150', data: ma150All.slice(startIdx), color:'#c084fc' },
+            { name:'MA200', data: ma200All.slice(startIdx), color:'#60a5fa' }
+        ];
+        console.log('['+code+'] 日线展示 '+parsedDaily.dates.length+' 根, MA50/150/200 已计算');
 
         // 顺序生成两张K线图（并发会导致 node-canvas 字体渲染冲突，中文变方块）
         console.log('['+code+'] 生成30分K线图...');
         var png30m = await generateKlinePNG(parsed30m, buyCost, code, date, code + ' ' + date + ' 30分K');
-        console.log('['+code+'] 生成日K线图...');
-        var pngDaily = await generateKlinePNG(parsedDaily, buyCost, code, date, code + ' ' + date + ' 日K');
+        console.log('['+code+'] 生成日K线图（含MA均线）...');
+        var pngDaily = await generateKlinePNG(parsedDaily, buyCost, code, date, code + ' ' + date + ' 日K', maData);
         console.log('['+code+'] 30分K图 '+png30m.length+' bytes, 日K图 '+pngDaily.length+' bytes');
 
         var tmp30m = path.join(TMP_DIR, code+'_'+date+'_30m_kline.png');

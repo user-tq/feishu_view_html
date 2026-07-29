@@ -180,12 +180,17 @@
 
         async function loadDailyChart(code, date, cost) {
             try {
-                const response = await fetch(`/api/daily-kline?code=${encodeURIComponent(code)}&date=${encodeURIComponent(date)}`);
+                const response = await fetch(`/api/daily-kline?code=${encodeURIComponent(code)}&date=${encodeURIComponent(date)}&ma=1`);
                 const result = await response.json();
                 if (!result.success || !result.klines || result.klines.length === 0) {
                     throw new Error(result.error || '未获取到日线数据');
                 }
-                renderChart(result.klines, parseFloat(cost), 'dailyKlineChart');
+                const maData = result.ma ? [
+                    { name: 'MA50',  data: result.ma.MA50,  color: '#f59e0b' },
+                    { name: 'MA150', data: result.ma.MA150, color: '#c084fc' },
+                    { name: 'MA200', data: result.ma.MA200, color: '#60a5fa' }
+                ] : null;
+                renderChart(result.klines, parseFloat(cost), 'dailyKlineChart', maData);
             } catch (err) {
                 document.getElementById('dailyKlineChart').innerHTML = `<div class="center-message error"><p>加载日线数据失败</p><p>${err.message}</p></div>`;
             }
@@ -212,7 +217,7 @@
             }
         }
 
-        function renderChart(klines, cost, containerId) {
+        function renderChart(klines, cost, containerId, maData) {
             const dates = [];
             const ohlc = [];
             const volumes = [];
@@ -230,18 +235,70 @@
             const chartDom = document.getElementById(containerId);
             const myChart = echarts.init(chartDom);
 
+            var series = [
+                {
+                    type: 'candlestick',
+                    data: ohlc,
+                    itemStyle: {
+                        color: '#ef4444',
+                        color0: '#22c55e',
+                        borderColor: '#ef4444',
+                        borderColor0: '#22c55e'
+                    },
+                    markLine: {
+                        symbol: ['none', 'none'],
+                        label: {
+                            show: true,
+                            position: 'insideStartTop',
+                            color: '#fbbf24',
+                            backgroundColor: 'rgba(13,17,23,0.8)',
+                            padding: [3, 6],
+                            formatter: `成本 ${cost.toFixed(2)}`
+                        },
+                        lineStyle: { color: '#fbbf24', type: 'dashed', width: 1.5 },
+                        data: [{ yAxis: cost }]
+                    }
+                },
+                {
+                    type: 'bar',
+                    xAxisIndex: 1,
+                    yAxisIndex: 1,
+                    data: volumes,
+                    barWidth: '60%'
+                }
+            ];
+
+            if (maData && maData.length > 0) {
+                maData.forEach(function(ma) {
+                    series.push({
+                        type: 'line',
+                        data: ma.data,
+                        smooth: true,
+                        symbol: 'none',
+                        lineStyle: { color: ma.color, width: 1.5 },
+                        name: ma.name,
+                        z: 5
+                    });
+                });
+            }
+
             const option = {
                 backgroundColor: '#0d1117',
                 tooltip: {
                     trigger: 'axis',
                     axisPointer: { type: 'cross' }
                 },
+                legend: maData && maData.length > 0 ? {
+                    data: maData.map(m => m.name),
+                    textStyle: { color: '#8b949e', fontSize: 11 },
+                    top: 5, right: 50, itemWidth: 14, itemHeight: 8
+                } : undefined,
                 axisPointer: {
                     link: [{ xAxisIndex: 'all' }],
                     label: { backgroundColor: '#30363d' }
                 },
                 grid: [
-                    { left: '60', right: '40', top: '30', height: '55%' },
+                    { left: '60', right: '40', top: maData ? '35' : '30', height: maData ? '50%' : '55%' },
                     { left: '60', right: '40', top: '62%', height: '15%' }
                 ],
                 xAxis: [
@@ -280,38 +337,7 @@
                     { type: 'inside', xAxisIndex: [0, 1], start: 0, end: 100 },
                     { type: 'slider', xAxisIndex: [0, 1], start: 0, end: 100, bottom: 5, borderColor: '#30363d', fillerColor: 'rgba(31,111,235,0.2)', handleStyle: { color: '#1f6feb' }, textStyle: { color: '#8b949e' } }
                 ],
-                series: [
-                    {
-                        type: 'candlestick',
-                        data: ohlc,
-                        itemStyle: {
-                            color: '#ef4444',
-                            color0: '#22c55e',
-                            borderColor: '#ef4444',
-                            borderColor0: '#22c55e'
-                        },
-                        markLine: {
-                            symbol: ['none', 'none'],
-                            label: {
-                                show: true,
-                                position: 'insideStartTop',
-                                color: '#fbbf24',
-                                backgroundColor: 'rgba(13,17,23,0.8)',
-                                padding: [3, 6],
-                                formatter: `成本 ${cost.toFixed(2)}`
-                            },
-                            lineStyle: { color: '#fbbf24', type: 'dashed', width: 1.5 },
-                            data: [{ yAxis: cost }]
-                        }
-                    },
-                    {
-                        type: 'bar',
-                        xAxisIndex: 1,
-                        yAxisIndex: 1,
-                        data: volumes,
-                        barWidth: '60%'
-                    }
-                ]
+                series: series
             };
 
             myChart.setOption(option);
