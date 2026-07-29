@@ -132,42 +132,40 @@ async function fetchKlineData(code, date) {
 }
 
 async function fetchDailyKlineData(code, date, priorDays = 49) {
-    // 东方财富前复权日线接口，和通达信一致
+    // 腾讯前复权日线接口，和通达信一致
     const isShanghai = code.startsWith('6') || code.startsWith('9') || code.startsWith('5');
-    const market = isShanghai ? '1' : '0';
-    const secid = market + '.' + code;
+    const prefix = isShanghai ? 'sh' : 'sz';
+    const symbol = prefix + code;
 
-    // 确保有足够数据用于MA200计算 + 展示50根 + 输入日期到今天的量 + 缓冲
-    const today = new Date();
-    const inputDate = new Date(date);
-    const calendarDaysDiff = Math.max(1, Math.ceil((today - inputDate) / (24 * 60 * 60 * 1000)));
-    const estimatedTradingDays = Math.ceil(calendarDaysDiff * 5 / 7);
-    // 至少要保证 MA200 有数据：200 + priorDays（用于计算MA的前置数据）
-    const minLmt = 200 + priorDays + estimatedTradingDays + 50;
-    const lmt = Math.max(minLmt, 800);
+    // 起始日期：往前多取 400 天自然日，保证覆盖 priorDays + 200 (MA200) 个交易日
+    const inputDateObj = new Date(date);
+    const startDateObj = new Date(inputDateObj.getTime() - 400 * 24 * 60 * 60 * 1000);
+    const startDate = startDateObj.toISOString().slice(0, 10);
+    const endDate = '2099-12-31';
 
-    const apiUrl = 'http://push2his.eastmoney.com/api/qt/stock/kline/get?secid=' + secid +
-        '&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61' +
-        '&klt=101&fqt=1&end=20500101&lmt=' + lmt;
+    const apiUrl = 'https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=' + symbol + ',day,' + startDate + ',' + endDate + ',800,qfq';
     const response = await axios.get(apiUrl, {
         timeout: 15000,
-        headers: { 'User-Agent': 'Mozilla/5.0', 'Referer': 'https://quote.eastmoney.com/' }
+        headers: { 'User-Agent': 'Mozilla/5.0', 'Referer': 'https://gu.qq.com/' }
     });
     const payload = response.data;
-    if (!payload || !payload.data || !Array.isArray(payload.data.klines) || payload.data.klines.length === 0) {
+    if (!payload || payload.code !== 0 || !payload.data || !payload.data[symbol]) {
+        throw new Error('未获取到日线数据');
+    }
+    const klineArr = payload.data[symbol].qfqday || payload.data[symbol].day;
+    if (!Array.isArray(klineArr) || klineArr.length === 0) {
         throw new Error('未获取到日线数据');
     }
 
-    // 东方财富kline格式: "日期,开,收,低,高,成交量,成交额,振幅,涨跌幅,涨跌额,换手率"
-    const allKlines = payload.data.klines.map(function(line) {
-        var parts = line.split(',');
+    // 腾讯格式: [日期, 开, 收, 低, 高, 成交量]
+    const allKlines = klineArr.map(function(item) {
         return {
-            day: parts[0],
-            open: parts[1],
-            close: parts[2],
-            low: parts[3],
-            high: parts[4],
-            volume: parts[5]
+            day: item[0],
+            open: item[1],
+            close: item[2],
+            low: item[3],
+            high: item[4],
+            volume: item[5]
         };
     }).sort(function(a, b) { return new Date(a.day) - new Date(b.day); });
 
@@ -194,35 +192,39 @@ async function fetchDailyKlineData(code, date, priorDays = 49) {
 }
 
 async function fetchHighestPriceInRange(code, buyDate, sellDate) {
-    // 东方财富前复权日线，与通达信/K线图数据源保持一致
+    // 腾讯前复权日线，与通达信/K线图数据源保持一致
     const isShanghai = code.startsWith('6') || code.startsWith('9') || code.startsWith('5');
-    const market = isShanghai ? '1' : '0';
-    const secid = market + '.' + code;
+    const prefix = isShanghai ? 'sh' : 'sz';
+    const symbol = prefix + code;
 
     const today = new Date();
     const calendarDaysDiff = Math.max(1, Math.ceil((today - new Date(buyDate)) / (24 * 60 * 60 * 1000)));
-    const lmt = Math.min(Math.max(calendarDaysDiff + 50, 200), 2000);
+    // 起始日期往前多取 60 天自然日，保证覆盖买入日期
+    const startDateObj = new Date(new Date(buyDate).getTime() - 60 * 24 * 60 * 60 * 1000);
+    const startDate = startDateObj.toISOString().slice(0, 10);
+    const endDate = '2099-12-31';
 
-    const apiUrl = 'http://push2his.eastmoney.com/api/qt/stock/kline/get?secid=' + secid +
-        '&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61' +
-        '&klt=101&fqt=1&end=20500101&lmt=' + lmt;
+    const apiUrl = 'https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=' + symbol + ',day,' + startDate + ',' + endDate + ',800,qfq';
     const response = await axios.get(apiUrl, {
-        timeout: 15000, headers: { 'User-Agent': 'Mozilla/5.0', 'Referer': 'https://quote.eastmoney.com/' }
+        timeout: 15000, headers: { 'User-Agent': 'Mozilla/5.0', 'Referer': 'https://gu.qq.com/' }
     });
     const payload = response.data;
-    if (!payload || !payload.data || !Array.isArray(payload.data.klines) || payload.data.klines.length === 0) {
+    if (!payload || payload.code !== 0 || !payload.data || !payload.data[symbol]) {
+        throw new Error('未获取到日线数据');
+    }
+    const klineArr = payload.data[symbol].qfqday || payload.data[symbol].day;
+    if (!Array.isArray(klineArr) || klineArr.length === 0) {
         throw new Error('未获取到日线数据');
     }
 
-    const allKlines = payload.data.klines.map(function(line) {
-        var parts = line.split(',');
+    const allKlines = klineArr.map(function(item) {
         return {
-            day: parts[0],
-            open: parts[1],
-            close: parts[2],
-            low: parts[3],
-            high: parts[4],
-            volume: parts[5]
+            day: item[0],
+            open: item[1],
+            close: item[2],
+            low: item[3],
+            high: item[4],
+            volume: item[5]
         };
     }).sort(function(a, b) { return new Date(a.day) - new Date(b.day); });
     const allDates = allKlines.map(function(k) { return k.day.split(' ')[0]; });
